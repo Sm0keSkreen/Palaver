@@ -90,6 +90,102 @@ body{
   flex:1;
   min-height:0;
   display:flex;
+  flex-direction:row;
+  position:relative;
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar{
+  width:260px;
+  flex-shrink:0;
+  display:flex;
+  flex-direction:column;
+  background:var(--panel);
+  border-right:1px solid var(--border);
+  min-height:0;
+  transition:margin-left .18s ease;
+}
+#app.sidebar-collapsed .sidebar{margin-left:-260px;}
+.sidebar-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:12px 14px 8px;
+  flex-shrink:0;
+}
+.sidebar-expand-btn{
+  display:none;
+  position:absolute;
+  top:9px;
+  left:10px;
+  z-index:15;
+}
+#app.sidebar-collapsed .sidebar-expand-btn{display:inline-flex;}
+.new-chat-btn{
+  margin:4px 14px 10px;
+  text-align:center;
+  justify-content:center;
+}
+.chat-list{
+  flex:1;
+  min-height:0;
+  overflow-y:auto;
+  padding:0 8px 10px;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.chat-list-empty{
+  color:var(--text-dim);
+  font-size:12px;
+  text-align:center;
+  padding:18px 10px;
+}
+.chat-list-item{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:8px 9px;
+  border-radius:7px;
+  cursor:pointer;
+  color:var(--text-dim);
+}
+.chat-list-item:hover{background:var(--panel-2);}
+.chat-list-item.active{background:var(--accent-soft);color:var(--text);}
+.chat-list-item .title{
+  flex:1;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:12.5px;
+}
+.chat-list-item.active .title{color:var(--text);font-weight:600;}
+.chat-list-item .del{
+  flex-shrink:0;
+  width:20px;height:20px;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:5px;
+  color:var(--text-dim);
+  opacity:0;
+  font-size:13px;
+  line-height:1;
+}
+.chat-list-item:hover .del{opacity:1;}
+.chat-list-item .del:hover{background:var(--border);color:var(--text);}
+.chat-list-item .del.confirm{opacity:1;color:#e5534b;}
+
+.btn.danger{border-color:#5a2a26;color:#e5534b;background:transparent;}
+.btn.danger:hover{background:rgba(229,83,75,.12);}
+.btn.danger.confirm{background:#e5534b;border-color:#e5534b;color:#fff;}
+
+/* ---------- Main panel ---------- */
+.main-panel{
+  flex:1;
+  min-width:0;
+  min-height:0;
+  display:flex;
   flex-direction:column;
 }
 
@@ -108,13 +204,9 @@ body{
   font-weight:600;
   font-size:14.5px;
   letter-spacing:.01em;
-  display:flex;
-  align-items:center;
-  gap:7px;
   white-space:nowrap;
   color:var(--text);
 }
-.brand .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block;}
 
 .topbar-spacer{flex:1;}
 
@@ -317,48 +409,60 @@ body{
 </head>
 <body>
 <div id="app">
-  <header class="topbar">
-    <div class="brand"><span class="dot"></span>Palaver</div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="brand">Palaver</div>
+      <button class="btn ghost small" id="sidebarCollapseBtn" title="Collapse sidebar">‹</button>
+    </div>
+    <button class="btn primary new-chat-btn" id="newChatBtn">+ New chat</button>
+    <div class="chat-list" id="chatList"></div>
+  </aside>
+  <button class="btn ghost small sidebar-expand-btn" id="sidebarExpandBtn" title="Show chats">›</button>
 
-    <div class="topbar-spacer"></div>
+  <div class="main-panel">
+    <header class="topbar">
+      <div class="topbar-spacer"></div>
 
-    <div class="menu-wrap model-wrap">
-      <button class="btn ghost" id="modelToggleBtn">Model: <span id="modelBtnLabel">…</span></button>
-      <div class="dropdown-panel model-panel" id="modelPanel">
-        <div class="label">AI model</div>
-        <div class="row" id="aiModelList"></div>
+      <div class="menu-wrap model-wrap">
+        <button class="btn ghost" id="modelToggleBtn">Model: <span id="modelBtnLabel">…</span></button>
+        <div class="dropdown-panel model-panel" id="modelPanel">
+          <div class="label">AI model</div>
+          <div class="row" id="aiModelList"></div>
+        </div>
       </div>
-    </div>
 
-    <div class="menu-wrap settings-wrap">
-      <button class="btn ghost" id="settingsToggleBtn">Settings</button>
-      <div class="dropdown-panel settings-panel" id="settingsPanel">
-        <div class="label">Theme</div>
-        <div class="row" id="themeRow"></div>
+      <div class="menu-wrap settings-wrap">
+        <button class="btn ghost" id="settingsToggleBtn">Settings</button>
+        <div class="dropdown-panel settings-panel" id="settingsPanel">
+          <div class="label">Theme</div>
+          <div class="row" id="themeRow"></div>
+          <div class="label">Chats</div>
+          <div class="row">
+            <button class="btn small danger" id="deleteAllChatsBtn">Delete all chats</button>
+          </div>
+        </div>
       </div>
-    </div>
+    </header>
 
-    <button class="btn ghost" id="clearBtn">New chat</button>
-  </header>
-
-  <main class="chat-wrap">
-    <div class="chat-scroll" id="chatScroll">
-      <div class="chat-empty" id="chatEmpty">
-        <div class="big">Start a conversation</div>
-        <div>Pick a model up top, then say hello. Everything runs on-device — nothing leaves your browser.</div>
+    <main class="chat-wrap">
+      <div class="chat-scroll" id="chatScroll">
+        <div class="chat-empty" id="chatEmpty">
+          <div class="big">Start a conversation</div>
+          <div>Pick a model up top, then say hello. Everything runs on-device — nothing leaves your browser.</div>
+        </div>
       </div>
-    </div>
 
-    <div class="composer">
-      <textarea id="composerInput" rows="1" placeholder="Message Palaver…"></textarea>
-      <button class="btn primary ai-progress-btn" id="sendBtn"><span class="ai-progress-fill" id="aiProgressFill"></span><span class="ai-progress-label" id="aiProgressLabel">Send</span></button>
-    </div>
-  </main>
+      <div class="composer">
+        <textarea id="composerInput" rows="1" placeholder="Message Palaver…"></textarea>
+        <button class="btn primary ai-progress-btn" id="sendBtn"><span class="ai-progress-fill" id="aiProgressFill"></span><span class="ai-progress-label" id="aiProgressLabel">Send</span></button>
+      </div>
+    </main>
 
-  <div class="statusbar">
-    <span id="engineStatus">Loading…</span>
-    <div class="statusbar-spacer"></div>
-    <span id="msgCount"></span>
+    <div class="statusbar">
+      <span id="engineStatus">Loading…</span>
+      <div class="statusbar-spacer"></div>
+      <span id="msgCount"></span>
+    </div>
   </div>
 </div>
 
@@ -377,7 +481,7 @@ body{
   const MODELS = {
     fast:     { id: 'onnx-community/Qwen2.5-0.5B-Instruct',        label: 'Fast',     meta: '~400MB · quickest replies', dtype: 'q4' },
     balanced: { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',   label: 'Balanced', meta: '~800MB · Meta Llama 3.2',   dtype: 'q4' },
-    better:   { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',         label: 'Better',   meta: '~1.1GB · highest quality',  dtype: 'q4f16' },
+    better:   { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',         label: 'Better',   meta: '~1.4GB · highest quality',  dtype: 'q4' },
   };
   const DEFAULT_MODEL = 'fast';
 
@@ -400,7 +504,12 @@ body{
   const settingsToggleBtn = $('#settingsToggleBtn');
   const settingsPanel = $('#settingsPanel');
   const themeRow = $('#themeRow');
-  const clearBtn = $('#clearBtn');
+  const deleteAllChatsBtn = $('#deleteAllChatsBtn');
+  const sidebar = $('#sidebar');
+  const sidebarCollapseBtn = $('#sidebarCollapseBtn');
+  const sidebarExpandBtn = $('#sidebarExpandBtn');
+  const newChatBtn = $('#newChatBtn');
+  const chatList = $('#chatList');
   const chatScroll = $('#chatScroll');
   const chatEmpty = $('#chatEmpty');
   const composerInput = $('#composerInput');
@@ -411,9 +520,12 @@ body{
   const msgCount = $('#msgCount');
 
   const SKIP_KEY_PREFIX = 'palaver-ai-skip-';
+  const CHATS_KEY = 'palaver-chats-v1';
 
   const state = {
     modelKey: DEFAULT_MODEL,
+    chats: [],              // [{id, title, messages, modelKey, createdAt, updatedAt}], most-recent-first
+    chatId: null,
     unavailable: {},       // modelKey -> true once confirmed to fail on this device
     pipelinesReady: {},
     loadPromises: {},
@@ -790,15 +902,217 @@ body{
     return wrap;
   }
 
-  function clearChat() {
-    state.messages = [];
+  /* --------------------------- Chat history (sidebar) ---------------------- */
+  // Every conversation is stored client-side only, in localStorage — nothing
+  // ever leaves the browser, same as the model inference itself.
+
+  function loadChatsFromStorage() {
+    try {
+      const raw = localStorage.getItem(CHATS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveChatsToStorage() {
+    try { localStorage.setItem(CHATS_KEY, JSON.stringify(state.chats)); } catch { /* storage unavailable; ignore */ }
+  }
+
+  function makeChatId() {
+    return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function titleForChat(chat) {
+    if (chat.title) return chat.title;
+    const firstUser = chat.messages.find((m) => m.role === 'user');
+    if (!firstUser) return 'New chat';
+    const t = firstUser.content.trim().replace(/\s+/g, ' ');
+    return t.length > 42 ? t.slice(0, 42) + '…' : t;
+  }
+
+  function findChat(id) {
+    return state.chats.find((c) => c.id === id) || null;
+  }
+
+  function sortChatsByRecency() {
+    state.chats.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  function renderChatList() {
+    chatList.innerHTML = '';
+    if (!state.chats.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-list-empty';
+      empty.textContent = 'No chats yet';
+      chatList.appendChild(empty);
+      return;
+    }
+    state.chats.forEach((chat) => {
+      const item = document.createElement('div');
+      item.className = 'chat-list-item' + (chat.id === state.chatId ? ' active' : '');
+      const title = document.createElement('span');
+      title.className = 'title';
+      title.textContent = titleForChat(chat);
+      const del = document.createElement('span');
+      del.className = 'del';
+      del.textContent = '✕';
+      del.title = 'Delete chat';
+      let confirming = false;
+      let revertTimer = null;
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!confirming) {
+          confirming = true;
+          del.classList.add('confirm');
+          del.textContent = '✓';
+          del.title = 'Click again to delete';
+          revertTimer = setTimeout(() => {
+            confirming = false;
+            del.classList.remove('confirm');
+            del.textContent = '✕';
+            del.title = 'Delete chat';
+          }, 2200);
+          return;
+        }
+        clearTimeout(revertTimer);
+        deleteChatById(chat.id);
+      });
+      item.appendChild(title);
+      item.appendChild(del);
+      item.addEventListener('click', () => switchToChat(chat.id));
+      chatList.appendChild(item);
+    });
+  }
+
+  function loadChatIntoView(chat) {
+    state.chatId = chat.id;
+    state.messages = chat.messages.map((m) => ({ role: m.role, content: m.content, modelLabel: m.modelLabel }));
     chatScroll.querySelectorAll('.msg').forEach((n) => n.remove());
-    chatEmpty.style.display = '';
+    if (state.messages.length) {
+      chatEmpty.style.display = 'none';
+      state.messages.forEach((m) => {
+        addMessageBubble(m.role, m.content, m.role === 'assistant' ? (m.modelLabel || (MODELS[chat.modelKey] ? MODELS[chat.modelKey].label : '')) : undefined);
+      });
+    } else {
+      chatEmpty.style.display = '';
+    }
     renderMsgCount();
   }
-  clearBtn.addEventListener('click', () => {
+
+  function switchToChat(id) {
+    if (state.generating || id === state.chatId) { renderChatList(); return; }
+    const chat = findChat(id);
+    if (!chat) return;
+    if (MODELS[chat.modelKey]) {
+      state.modelKey = chat.modelKey;
+      renderModelOptions();
+      updateSendBtn();
+      if (!state.pipelinesReady[chat.modelKey] && state.loading !== chat.modelKey) ensureModel(chat.modelKey).catch(() => {});
+    }
+    loadChatIntoView(chat);
+    renderChatList();
+  }
+
+  function createNewChat() {
     if (state.generating) return;
-    clearChat();
+    const chat = {
+      id: makeChatId(),
+      title: null,
+      messages: [],
+      modelKey: state.modelKey,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    state.chats.unshift(chat);
+    saveChatsToStorage();
+    loadChatIntoView(chat);
+    renderChatList();
+  }
+
+  function persistCurrentChat() {
+    let chat = findChat(state.chatId);
+    if (!chat) {
+      chat = { id: state.chatId || makeChatId(), title: null, messages: [], modelKey: state.modelKey, createdAt: Date.now(), updatedAt: Date.now() };
+      state.chatId = chat.id;
+      state.chats.unshift(chat);
+    }
+    chat.messages = state.messages.map((m) => ({ role: m.role, content: m.content, modelLabel: m.modelLabel }));
+    chat.modelKey = state.modelKey;
+    chat.updatedAt = Date.now();
+    if (!chat.title) chat.title = titleForChat(chat) !== 'New chat' ? titleForChat(chat) : null;
+    sortChatsByRecency();
+    saveChatsToStorage();
+    renderChatList();
+  }
+
+  function deleteChatById(id) {
+    const idx = state.chats.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+    state.chats.splice(idx, 1);
+    saveChatsToStorage();
+    if (state.chatId === id) {
+      if (state.chats.length) {
+        loadChatIntoView(state.chats[0]);
+      } else {
+        createNewChat();
+        return;
+      }
+    }
+    renderChatList();
+  }
+
+  function deleteAllChats() {
+    state.chats = [];
+    saveChatsToStorage();
+    createNewChat();
+  }
+
+  function initChats() {
+    state.chats = loadChatsFromStorage();
+    sortChatsByRecency();
+    if (state.chats.length) {
+      loadChatIntoView(state.chats[0]);
+      if (MODELS[state.chats[0].modelKey]) state.modelKey = state.chats[0].modelKey;
+    } else {
+      const chat = { id: makeChatId(), title: null, messages: [], modelKey: state.modelKey, createdAt: Date.now(), updatedAt: Date.now() };
+      state.chats.unshift(chat);
+      saveChatsToStorage();
+      loadChatIntoView(chat);
+    }
+    renderChatList();
+  }
+
+  newChatBtn.addEventListener('click', createNewChat);
+
+  let deleteAllConfirming = false;
+  let deleteAllTimer = null;
+  deleteAllChatsBtn.addEventListener('click', () => {
+    if (!deleteAllConfirming) {
+      deleteAllConfirming = true;
+      deleteAllChatsBtn.classList.add('confirm');
+      deleteAllChatsBtn.textContent = 'Click again to confirm';
+      deleteAllTimer = setTimeout(() => {
+        deleteAllConfirming = false;
+        deleteAllChatsBtn.classList.remove('confirm');
+        deleteAllChatsBtn.textContent = 'Delete all chats';
+      }, 2600);
+      return;
+    }
+    clearTimeout(deleteAllTimer);
+    deleteAllConfirming = false;
+    deleteAllChatsBtn.classList.remove('confirm');
+    deleteAllChatsBtn.textContent = 'Delete all chats';
+    settingsPanel.classList.remove('open');
+    deleteAllChats();
+  });
+
+  sidebarCollapseBtn.addEventListener('click', () => {
+    document.getElementById('app').classList.add('sidebar-collapsed');
+  });
+  sidebarExpandBtn.addEventListener('click', () => {
+    document.getElementById('app').classList.remove('sidebar-collapsed');
   });
 
   /* ------------------------------ Composer --------------------------------- */
@@ -859,6 +1173,7 @@ body{
     state.messages.push({ role: 'user', content: text });
     addMessageBubble('user', text);
     renderMsgCount();
+    persistCurrentChat();
 
     try {
       await ensureModel(state.modelKey);
@@ -868,7 +1183,7 @@ body{
     }
 
     const modelKeyAtStart = state.modelKey;
-    const wireMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...state.messages];
+    const wireMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))];
     const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true };
 
     state.generating = true;
@@ -898,8 +1213,9 @@ body{
         const finalText = (text || acc || '').trim();
         cursor.remove();
         wrap._bubble.textContent = finalText || '(no response)';
-        state.messages.push({ role: 'assistant', content: finalText });
+        state.messages.push({ role: 'assistant', content: finalText, modelLabel: MODELS[modelKeyAtStart].label });
         renderMsgCount();
+        persistCurrentChat();
       }
     } catch (err) {
       if (!state.stopRequested) {
@@ -916,6 +1232,7 @@ body{
 
   /* -------------------------------- Boot ------------------------------------ */
 
+  initChats();
   renderModelOptions();
   renderThemes();
   updateSendBtn();
