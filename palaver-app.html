@@ -268,6 +268,7 @@ body{
 .dropdown-panel .row:last-child{margin-bottom:0;}
 .dropdown-panel .label{font-weight:600;font-size:11.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;}
 .model-panel{max-height:min(70vh,520px);overflow-y:auto;}
+.debug-hint{font-size:10.5px;color:var(--text-dim);line-height:1.4;margin-top:2px;}
 
 .theme-swatch{
   width:26px;height:26px;border-radius:50%;cursor:pointer;
@@ -441,6 +442,11 @@ body{
           <div class="row">
             <button class="btn small danger" id="deleteAllChatsBtn">Delete all chats</button>
           </div>
+          <div class="label">Debug</div>
+          <div class="row">
+            <button class="btn small" id="debugModeBtn">Debug mode: Off</button>
+          </div>
+          <div class="debug-hint">Shows the real error text (from the browser console) in chat and status messages instead of a generic failure message.</div>
         </div>
       </div>
     </header>
@@ -513,6 +519,7 @@ body{
   const settingsPanel = $('#settingsPanel');
   const themeRow = $('#themeRow');
   const deleteAllChatsBtn = $('#deleteAllChatsBtn');
+  const debugModeBtn = $('#debugModeBtn');
   const sidebar = $('#sidebar');
   const sidebarCollapseBtn = $('#sidebarCollapseBtn');
   const sidebarExpandBtn = $('#sidebarExpandBtn');
@@ -529,6 +536,7 @@ body{
 
   const SKIP_KEY_PREFIX = 'palaver-ai-skip-';
   const CHATS_KEY = 'palaver-chats-v1';
+  const DEBUG_MODE_KEY = 'palaver-debug-mode';
 
   const state = {
     modelKey: DEFAULT_MODEL,
@@ -541,12 +549,14 @@ body{
     loadingPct: null,
     loadStartedAt: null,
     loadError: null,
+    lastErrorMessage: null, // raw error text from the worker, for debug mode
     generating: false,
     genTokens: 0,
     genMaxTokens: 0,
     genStartedAt: null,
     messages: [],           // {role:'user'|'assistant', content, modelLabel?}
     stopRequested: false,
+    debugMode: false,       // when on, show real error text instead of a generic message
   };
 
   try {
@@ -557,6 +567,10 @@ body{
       const firstOk = Object.keys(MODELS).find((k) => !state.unavailable[k]);
       if (firstOk) state.modelKey = firstOk;
     }
+  } catch { /* storage unavailable; ignore */ }
+
+  try {
+    state.debugMode = localStorage.getItem(DEBUG_MODE_KEY) === '1';
   } catch { /* storage unavailable; ignore */ }
 
   /* --------------------------- Worker plumbing --------------------------- */
@@ -654,7 +668,10 @@ body{
     const w = new Worker(url, { type: 'module' });
     URL.revokeObjectURL(url);
     w.onmessage = onWorkerMessage;
-    w.onerror = (err) => console.error('AI worker error:', err);
+    w.onerror = (err) => {
+      console.error('AI worker error:', err);
+      state.lastErrorMessage = (err && (err.message || String(err))) || 'Unknown worker error';
+    };
     return w;
   }
   worker = makeWorker();
@@ -685,6 +702,7 @@ body{
     const resolver = loadResolvers[key];
     delete loadResolvers[key];
     if (errMessage) {
+      state.lastErrorMessage = errMessage;
       // A model can fail outright on a device whose real memory is smaller
       // than the model needs. A failed WASM allocation leaves
       // onnxruntime-web's memory maxed out (WebAssembly.Memory can grow but
@@ -879,7 +897,9 @@ body{
       sendBtn.disabled = false;
       setProgressFill(0);
       aiProgressLabel.textContent = 'Retry';
-      engineStatus.textContent = 'Model failed to load';
+      engineStatus.textContent = (state.debugMode && state.lastErrorMessage)
+        ? `Model failed to load: ${state.lastErrorMessage}`
+        : 'Model failed to load';
     } else {
       sendBtn.disabled = false;
       setProgressFill(0);
@@ -1134,6 +1154,17 @@ body{
     deleteAllChats();
   });
 
+  function updateDebugModeBtn() {
+    debugModeBtn.textContent = 'Debug mode: ' + (state.debugMode ? 'On' : 'Off');
+    debugModeBtn.classList.toggle('primary', state.debugMode);
+  }
+  debugModeBtn.addEventListener('click', () => {
+    state.debugMode = !state.debugMode;
+    try { localStorage.setItem(DEBUG_MODE_KEY, state.debugMode ? '1' : '0'); } catch { /* ignore */ }
+    updateDebugModeBtn();
+    updateSendBtn();
+  });
+
   sidebarCollapseBtn.addEventListener('click', () => {
     document.getElementById('app').classList.add('sidebar-collapsed');
   });
@@ -1203,8 +1234,10 @@ body{
 
     try {
       await ensureModel(state.modelKey);
-    } catch {
-      addMessageBubble('assistant', "Sorry — I couldn't load the AI model on this device.", MODELS[state.modelKey].label);
+    } catch (err) {
+      const base = "Sorry — I couldn't load the AI model on this device.";
+      const msg = (state.debugMode && err && err.message) ? `${base}\n\nDebug: ${err.message}` : base;
+      addMessageBubble('assistant', msg, MODELS[state.modelKey].label);
       return;
     }
 
@@ -1247,7 +1280,8 @@ body{
       if (!state.stopRequested) {
         cursor.remove();
         console.error(err);
-        wrap._bubble.textContent = acc ? acc + '\n\n[generation failed]' : 'Something went wrong generating a reply.';
+        const detail = (state.debugMode && err && err.message) ? ` (${err.message})` : '';
+        wrap._bubble.textContent = acc ? acc + '\n\n[generation failed' + detail + ']' : 'Something went wrong generating a reply.' + detail;
       }
     } finally {
       currentGenWrap = null;
@@ -1261,6 +1295,7 @@ body{
   initChats();
   renderModelOptions();
   renderThemes();
+  updateDebugModeBtn();
   updateSendBtn();
   autoGrow();
   // Start fetching the default model in the background immediately, so Send
