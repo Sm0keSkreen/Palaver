@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Palaver — offline AI chat</title>
+<style>
+:root{
+  /* Midnight (default): deep navy, monochrome blue — same palette as Emend */
+  --bg:#080b11;
+  --panel:#0d121a;
+  --panel-2:#111826;
+  --border:#1c2432;
+  --text:#dde3ee;
+  --text-dim:#78839a;
+  --accent:#3e82f7;
+  --accent-hover:#2f6fe0;
+  --accent-soft:rgba(62,130,247,.14);
+  --user-bubble:#1a2740;
+  --assistant-bubble:#111826;
+  --radius:8px;
+  --font-ui:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:14.5px;
+}
+
+:root[data-theme="nord"]{
+  --bg:#2e3440;
+  --panel:#333a48;
+  --panel-2:#3b4252;
+  --border:#4c566a;
+  --text:#eceff4;
+  --text-dim:#9aa5b8;
+  --accent:#5e81ac;
+  --accent-hover:#81a1c1;
+  --accent-soft:rgba(94,129,172,.2);
+  --user-bubble:#434c5e;
+  --assistant-bubble:#3b4252;
+}
+
+:root[data-theme="ocean"]{
+  --bg:#0d1117;
+  --panel:#111823;
+  --panel-2:#161d29;
+  --border:#21262d;
+  --text:#e6edf3;
+  --text-dim:#7d8590;
+  --accent:#388bfd;
+  --accent-hover:#58a6ff;
+  --accent-soft:rgba(56,139,253,.15);
+  --user-bubble:#1c2836;
+  --assistant-bubble:#161d29;
+}
+
+:root[data-theme="sky"]{
+  --bg:#f2f6fc;
+  --panel:#ffffff;
+  --panel-2:#edf2fa;
+  --border:#d7e3f0;
+  --text:#12203a;
+  --text-dim:#5b6b82;
+  --accent:#2f7de9;
+  --accent-hover:#1d63c9;
+  --accent-soft:rgba(47,125,233,.1);
+  --user-bubble:#dce8fb;
+  --assistant-bubble:#ffffff;
+  color-scheme:light;
+}
+
+html{color-scheme:dark;}
+
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px;}
+::-webkit-scrollbar-thumb:hover{background:var(--text-dim);}
+
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0;
+  font-family:var(--font-ui);
+  background:var(--bg);
+  color:var(--text);
+  display:flex;
+  flex-direction:column;
+  height:100vh;
+  overflow:hidden;
+}
+#app{
+  flex:1;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+
+/* ---------- Top bar ---------- */
+.topbar{
+  display:flex;
+  align-items:center;
+  gap:16px;
+  padding:9px 18px;
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  flex-wrap:wrap;
+  flex-shrink:0;
+}
+.brand{
+  font-weight:600;
+  font-size:14.5px;
+  letter-spacing:.01em;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  white-space:nowrap;
+  color:var(--text);
+}
+.brand .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block;}
+
+.topbar-spacer{flex:1;}
+
+/* ---------- Buttons ---------- */
+.btn{
+  appearance:none;
+  border:1px solid var(--border);
+  background:var(--panel-2);
+  color:var(--text);
+  font:inherit;
+  font-size:12.5px;
+  font-weight:500;
+  padding:6px 12px;
+  border-radius:7px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.btn:hover{background:#161c27;border-color:#293140;}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+.btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn.small{padding:4px 9px;font-size:12px;}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--text-dim);}
+.btn.ghost:hover{background:var(--panel-2);color:var(--text);}
+
+/* Progress-fill button (model loading / generating), same technique as Emend:
+   a fill span behind the label, width driven by JS, so the button itself
+   reads as a progress bar without any separate UI element. */
+.ai-progress-btn{position:relative;overflow:hidden;}
+.ai-progress-btn:disabled{cursor:default;}
+.ai-progress-btn.busy:disabled{opacity:1;pointer-events:none;}
+.ai-progress-fill{
+  position:absolute;
+  inset:0 auto 0 0;
+  width:0%;
+  background:var(--accent-hover);
+  transition:width .25s ease;
+  z-index:0;
+}
+.ai-progress-label{position:relative;z-index:1;white-space:nowrap;}
+
+/* ---------- Dropdown menus (theme / model) ---------- */
+.menu-wrap{position:relative;}
+.dropdown-panel{
+  display:none;
+  position:absolute;
+  top:calc(100% + 6px);
+  right:0;
+  min-width:260px;
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:12px;
+  box-shadow:0 12px 32px rgba(0,0,0,.35);
+  z-index:20;
+}
+.dropdown-panel.open{display:block;}
+.dropdown-panel .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;}
+.dropdown-panel .row:last-child{margin-bottom:0;}
+.dropdown-panel .label{font-weight:600;font-size:11.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;}
+
+.theme-swatch{
+  width:26px;height:26px;border-radius:50%;cursor:pointer;
+  border:2px solid var(--border);background:var(--sw-bg);
+  box-shadow:inset 0 0 0 8px var(--sw-accent);
+}
+.theme-swatch.selected{border-color:var(--accent);}
+
+.chip{
+  border:1px solid var(--border);
+  background:var(--panel-2);
+  color:var(--text-dim);
+  font-size:12px;
+  padding:5px 10px;
+  border-radius:20px;
+  cursor:pointer;
+}
+.chip.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
+
+.model-option{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  border:1px solid var(--border);
+  background:var(--panel-2);
+  border-radius:8px;
+  padding:8px 10px;
+  cursor:pointer;
+  width:100%;
+}
+.model-option.selected{border-color:var(--accent);}
+.model-option.unavailable{opacity:.5;cursor:not-allowed;}
+.model-option .name{font-weight:600;font-size:12.5px;color:var(--text);}
+.model-option .meta{font-size:10.5px;color:var(--text-dim);}
+
+/* ---------- Chat area ---------- */
+.chat-wrap{
+  flex:1;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  width:100%;
+  max-width:900px;
+  margin:0 auto;
+  padding:0 18px;
+}
+.chat-scroll{
+  flex:1;
+  min-height:0;
+  overflow-y:auto;
+  padding:20px 4px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+.chat-empty{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  color:var(--text-dim);
+  text-align:center;
+  padding:24px;
+}
+.chat-empty .big{font-size:16px;color:var(--text);font-weight:600;}
+
+.msg{
+  display:flex;
+  gap:10px;
+  max-width:78%;
+}
+.msg.user{align-self:flex-end;flex-direction:row-reverse;}
+.msg.assistant{align-self:flex-start;}
+.msg .avatar{
+  flex-shrink:0;
+  width:26px;height:26px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;
+  background:var(--panel-2);
+  border:1px solid var(--border);
+  color:var(--text-dim);
+}
+.msg.user .avatar{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);}
+.msg .bubble{
+  background:var(--assistant-bubble);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:9px 13px;
+  font-size:13.5px;
+  line-height:1.55;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.msg.user .bubble{background:var(--user-bubble);}
+.msg .bubble .cursor{display:inline-block;width:7px;height:1em;background:var(--text-dim);vertical-align:text-bottom;margin-left:1px;animation:blink 1s step-start infinite;}
+@keyframes blink{50%{opacity:0;}}
+.msg .model-tag{font-size:10px;color:var(--text-dim);margin-top:4px;}
+
+/* ---------- Composer ---------- */
+.composer{
+  flex-shrink:0;
+  display:flex;
+  align-items:flex-end;
+  gap:8px;
+  padding:12px 4px 16px;
+}
+.composer textarea{
+  flex:1;
+  resize:none;
+  min-height:22px;
+  max-height:200px;
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:10px 12px;
+  color:var(--text);
+  font:inherit;
+  font-size:13.5px;
+  line-height:1.5;
+}
+.composer textarea:focus{outline:none;border-color:var(--accent);}
+.composer .btn{height:38px;}
+
+.statusbar{
+  flex-shrink:0;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:5px 18px;
+  font-size:11px;
+  color:var(--text-dim);
+  border-top:1px solid var(--border);
+  background:var(--panel);
+}
+.statusbar .statusbar-spacer{flex:1;}
+
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span>Palaver</div>
+
+    <div class="topbar-spacer"></div>
+
+    <div class="menu-wrap model-wrap">
+      <button class="btn ghost" id="modelToggleBtn">Model: <span id="modelBtnLabel">…</span></button>
+      <div class="dropdown-panel model-panel" id="modelPanel">
+        <div class="label">AI model</div>
+        <div class="row" id="aiModelList"></div>
+      </div>
+    </div>
+
+    <div class="menu-wrap settings-wrap">
+      <button class="btn ghost" id="settingsToggleBtn">Settings</button>
+      <div class="dropdown-panel settings-panel" id="settingsPanel">
+        <div class="label">Theme</div>
+        <div class="row" id="themeRow"></div>
+      </div>
+    </div>
+
+    <button class="btn ghost" id="clearBtn">New chat</button>
+  </header>
+
+  <main class="chat-wrap">
+    <div class="chat-scroll" id="chatScroll">
+      <div class="chat-empty" id="chatEmpty">
+        <div class="big">Start a conversation</div>
+        <div>Pick a model up top, then say hello. Everything runs on-device — nothing leaves your browser.</div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <textarea id="composerInput" rows="1" placeholder="Message Palaver…"></textarea>
+      <button class="btn primary ai-progress-btn" id="sendBtn"><span class="ai-progress-fill" id="aiProgressFill"></span><span class="ai-progress-label" id="aiProgressLabel">Send</span></button>
+    </div>
+  </main>
+
+  <div class="statusbar">
+    <span id="engineStatus">Loading…</span>
+    <div class="statusbar-spacer"></div>
+    <span id="msgCount"></span>
+  </div>
+</div>
+
+<script>
+/* Palaver: an offline AI chat. Every model runs entirely on-device via
+   transformers.js — nothing you type ever leaves the browser. Model
+   download and text generation both happen inside a dedicated Web Worker
+   (same approach as Emend's AI Check), so the page stays responsive and can
+   show live progress instead of freezing while the WASM/WebGPU backend does
+   its (synchronous-feeling) heavy lifting. */
+(() => {
+  'use strict';
+
+  const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
+
+  const MODELS = {
+    fast:     { id: 'onnx-community/Qwen2.5-0.5B-Instruct',        label: 'Fast',     meta: '~400MB · quickest replies', dtype: 'q4' },
+    balanced: { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',   label: 'Balanced', meta: '~800MB · Meta Llama 3.2',   dtype: 'q4' },
+    better:   { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',         label: 'Better',   meta: '~1.1GB · highest quality',  dtype: 'q4f16' },
+  };
+  const DEFAULT_MODEL = 'fast';
+
+  const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail.';
+  const MAX_NEW_TOKENS = 768;
+  const MAX_INPUT_LENGTH = 8000;
+
+  const THEMES = [
+    { id: 'midnight', label: 'Midnight', bg: '#080b11', accent: '#3e82f7' },
+    { id: 'nord', label: 'Nord', bg: '#2e3440', accent: '#5e81ac' },
+    { id: 'ocean', label: 'Ocean', bg: '#0d1117', accent: '#388bfd' },
+    { id: 'sky', label: 'Sky', bg: '#f2f6fc', accent: '#2f7de9' },
+  ];
+
+  const $ = (s) => document.querySelector(s);
+  const modelToggleBtn = $('#modelToggleBtn');
+  const modelBtnLabel = $('#modelBtnLabel');
+  const modelPanel = $('#modelPanel');
+  const modelList = $('#aiModelList');
+  const settingsToggleBtn = $('#settingsToggleBtn');
+  const settingsPanel = $('#settingsPanel');
+  const themeRow = $('#themeRow');
+  const clearBtn = $('#clearBtn');
+  const chatScroll = $('#chatScroll');
+  const chatEmpty = $('#chatEmpty');
+  const composerInput = $('#composerInput');
+  const sendBtn = $('#sendBtn');
+  const aiProgressFill = $('#aiProgressFill');
+  const aiProgressLabel = $('#aiProgressLabel');
+  const engineStatus = $('#engineStatus');
+  const msgCount = $('#msgCount');
+
+  const SKIP_KEY_PREFIX = 'palaver-ai-skip-';
+
+  const state = {
+    modelKey: DEFAULT_MODEL,
+    unavailable: {},       // modelKey -> true once confirmed to fail on this device
+    pipelinesReady: {},
+    loadPromises: {},
+    loading: null,
+    loadingPct: null,
+    loadStartedAt: null,
+    loadError: null,
+    generating: false,
+    genTokens: 0,
+    genMaxTokens: 0,
+    genStartedAt: null,
+    messages: [],           // {role:'user'|'assistant', content, modelLabel?}
+    stopRequested: false,
+  };
+
+  try {
+    Object.keys(MODELS).forEach((k) => {
+      if (sessionStorage.getItem(SKIP_KEY_PREFIX + k) === '1') state.unavailable[k] = true;
+    });
+    if (state.unavailable[state.modelKey]) {
+      const firstOk = Object.keys(MODELS).find((k) => !state.unavailable[k]);
+      if (firstOk) state.modelKey = firstOk;
+    }
+  } catch { /* storage unavailable; ignore */ }
+
+  /* --------------------------- Worker plumbing --------------------------- */
+  const WORKER_SRC = `
+    let transformersMod = null;
+    const pipelines = {};
+    let devicePromise = null;
+
+    async function pickDevice() {
+      if (!('gpu' in self.navigator)) return 'wasm';
+      try {
+        const adapter = await self.navigator.gpu.requestAdapter();
+        return adapter ? 'webgpu' : 'wasm';
+      } catch {
+        return 'wasm';
+      }
+    }
+
+    async function loadPipeline(modelId, dtype, device, onProgress) {
+      if (!transformersMod) {
+        transformersMod = await import(${JSON.stringify(TRANSFORMERS_CDN)});
+        // Forcing single-threaded WASM avoids onnxruntime-web sizing its
+        // memory arena for a cross-origin-isolated thread count that isn't
+        // actually available, which otherwise fails the very first
+        // allocation on machines with plenty of free RAM.
+        transformersMod.env.backends.onnx.wasm.numThreads = 1;
+      }
+      return transformersMod.pipeline('text-generation', modelId, {
+        dtype, device, progress_callback: onProgress,
+      });
+    }
+
+    self.onmessage = async (e) => {
+      const msg = e.data;
+      if (msg.type === 'loadModel') {
+        const { key, modelId, dtype } = msg;
+        try {
+          if (!devicePromise) devicePromise = pickDevice();
+          let device = await devicePromise;
+          const files = {};
+          const onProgress = (p) => {
+            if (p.status === 'progress' && p.file) {
+              files[p.file] = p;
+              let loaded = 0, total = 0;
+              for (const f of Object.values(files)) { loaded += f.loaded || 0; total += f.total || 0; }
+              self.postMessage({ type: 'loadProgress', key, pct: total ? Math.round((loaded / total) * 100) : 0 });
+            }
+          };
+          let generator;
+          try {
+            generator = await loadPipeline(modelId, dtype, device, onProgress);
+          } catch (err) {
+            if (device !== 'wasm') {
+              device = 'wasm';
+              generator = await loadPipeline(modelId, dtype, 'wasm', onProgress);
+            } else {
+              throw err;
+            }
+          }
+          pipelines[key] = generator;
+          self.postMessage({ type: 'loadDone', key });
+        } catch (err) {
+          self.postMessage({ type: 'loadError', key, message: String((err && err.message) || err) });
+        }
+      } else if (msg.type === 'generate') {
+        const { reqId, key, messages, genOpts } = msg;
+        try {
+          const pipe = pipelines[key];
+          if (!pipe) throw new Error('model not loaded: ' + key);
+          const streamer = new transformersMod.TextStreamer(pipe.tokenizer, {
+            skip_prompt: true,
+            skip_special_tokens: true,
+            callback_function: (chunk) => {
+              self.postMessage({ type: 'genChunk', reqId, text: chunk });
+            },
+          });
+          const result = await pipe(messages, Object.assign({}, genOpts, { streamer }));
+          let text = result && result[0] && result[0].generated_text;
+          if (Array.isArray(text)) text = (text[text.length - 1] && text[text.length - 1].content) || '';
+          self.postMessage({ type: 'genDone', reqId, text });
+        } catch (err) {
+          self.postMessage({ type: 'genError', reqId, message: String((err && err.message) || err) });
+        }
+      }
+    };
+  `;
+
+  let worker = null;
+  let workerReqSeq = 0;
+  const pendingGen = new Map(); // reqId -> { resolve, reject, onChunk }
+
+  function makeWorker() {
+    const blob = new Blob([WORKER_SRC], { type: 'text/javascript' });
+    const url = URL.createObjectURL(blob);
+    const w = new Worker(url, { type: 'module' });
+    URL.revokeObjectURL(url);
+    w.onmessage = onWorkerMessage;
+    w.onerror = (err) => console.error('AI worker error:', err);
+    return w;
+  }
+  worker = makeWorker();
+
+  function onWorkerMessage(e) {
+    const msg = e.data;
+    if (msg.type === 'loadProgress') {
+      if (state.loading === msg.key) { state.loadingPct = msg.pct; updateSendBtn(); }
+    } else if (msg.type === 'loadDone') {
+      state.pipelinesReady[msg.key] = true;
+      settleLoad(msg.key, null);
+    } else if (msg.type === 'loadError') {
+      settleLoad(msg.key, msg.message);
+    } else if (msg.type === 'genChunk') {
+      const p = pendingGen.get(msg.reqId);
+      if (p) p.onChunk(msg.text);
+    } else if (msg.type === 'genDone') {
+      const p = pendingGen.get(msg.reqId);
+      if (p) { pendingGen.delete(msg.reqId); p.resolve(msg.text); }
+    } else if (msg.type === 'genError') {
+      const p = pendingGen.get(msg.reqId);
+      if (p) { pendingGen.delete(msg.reqId); p.reject(new Error(msg.message)); }
+    }
+  }
+
+  const loadResolvers = {};
+  function settleLoad(key, errMessage) {
+    const resolver = loadResolvers[key];
+    delete loadResolvers[key];
+    if (errMessage) {
+      // A model can fail outright on a device whose real memory is smaller
+      // than the model needs. A failed WASM allocation leaves
+      // onnxruntime-web's memory maxed out (WebAssembly.Memory can grow but
+      // never shrink), so trying anything else in that SAME worker would
+      // fail identically. Ditch the poisoned worker for a fresh one.
+      console.warn(`Model "${key}" failed to load; marking unavailable:`, errMessage);
+      state.unavailable[key] = true;
+      try { sessionStorage.setItem(SKIP_KEY_PREFIX + key, '1'); } catch { /* ignore */ }
+      worker.terminate();
+      worker = makeWorker();
+      state.pipelinesReady = {};
+      renderModelOptions();
+      if (state.modelKey === key) {
+        const fallback = Object.keys(MODELS).find((k) => !state.unavailable[k]);
+        if (fallback) {
+          state.modelKey = fallback;
+          renderModelOptions();
+          ensureModel(fallback).then(
+            () => { if (resolver) resolver.resolve(); },
+            (err) => { if (resolver) resolver.reject(err); },
+          );
+          return;
+        }
+      }
+      state.loadError = key;
+      updateSendBtn();
+      if (resolver) resolver.reject(new Error(errMessage));
+      return;
+    }
+    if (resolver) resolver.resolve();
+  }
+
+  function ensureModel(key) {
+    if (state.pipelinesReady[key]) return Promise.resolve();
+    if (state.loadPromises[key]) return state.loadPromises[key];
+    const m = MODELS[key];
+    state.loading = key;
+    state.loadingPct = null;
+    state.loadStartedAt = Date.now();
+    state.loadError = null;
+    updateSendBtn();
+    const promise = new Promise((resolve, reject) => { loadResolvers[key] = { resolve, reject }; });
+    worker.postMessage({ type: 'loadModel', key, modelId: m.id, dtype: m.dtype });
+    const tracked = promise.finally(() => {
+      if (state.loading === key) state.loading = null;
+      delete state.loadPromises[key];
+      updateSendBtn();
+    });
+    state.loadPromises[key] = tracked;
+    return tracked;
+  }
+
+  function runGenerate(key, messages, genOpts, onChunk) {
+    return new Promise((resolve, reject) => {
+      const reqId = ++workerReqSeq;
+      pendingGen.set(reqId, { resolve, reject, onChunk });
+      worker.postMessage({ type: 'generate', reqId, key, messages, genOpts });
+    });
+  }
+
+  /* -------------------------------- UI ------------------------------------ */
+
+  function renderModelOptions() {
+    modelList.innerHTML = '';
+    Object.entries(MODELS).forEach(([key, m]) => {
+      const unavailable = !!state.unavailable[key];
+      const div = document.createElement('div');
+      div.className = 'model-option'
+        + (state.modelKey === key ? ' selected' : '')
+        + (unavailable ? ' unavailable' : '');
+      div.innerHTML = `<span class="name">${m.label}</span><span class="meta">${unavailable ? 'Unavailable on this device' : m.meta}</span>`;
+      div.addEventListener('click', () => selectModel(key));
+      modelList.appendChild(div);
+    });
+    modelBtnLabel.textContent = MODELS[state.modelKey].label;
+  }
+
+  function selectModel(key) {
+    if (state.unavailable[key]) {
+      flashSendBtn("That model isn't supported on this device.");
+      return;
+    }
+    state.modelKey = key;
+    renderModelOptions();
+    updateSendBtn();
+    if (!state.pipelinesReady[key] && state.loading !== key) ensureModel(key).catch(() => {});
+  }
+
+  function renderThemes() {
+    themeRow.innerHTML = '';
+    const current = document.documentElement.dataset.theme || 'midnight';
+    THEMES.forEach((t) => {
+      const btn = document.createElement('button');
+      btn.className = 'theme-swatch' + (t.id === current ? ' selected' : '');
+      btn.title = t.label;
+      btn.style.setProperty('--sw-bg', t.bg);
+      btn.style.setProperty('--sw-accent', t.accent);
+      btn.addEventListener('click', () => {
+        document.documentElement.dataset.theme = t.id;
+        renderThemes();
+      });
+      themeRow.appendChild(btn);
+    });
+  }
+
+  modelToggleBtn.addEventListener('click', () => {
+    modelPanel.classList.toggle('open');
+    settingsPanel.classList.remove('open');
+  });
+  settingsToggleBtn.addEventListener('click', () => {
+    settingsPanel.classList.toggle('open');
+    modelPanel.classList.remove('open');
+  });
+  document.addEventListener('click', (e) => {
+    const path = e.composedPath();
+    if (!path.includes(modelToggleBtn) && !path.includes(modelPanel)) modelPanel.classList.remove('open');
+    if (!path.includes(settingsToggleBtn) && !path.includes(settingsPanel)) settingsPanel.classList.remove('open');
+  });
+
+  function flashSendBtn(message, ms = 2200) {
+    setProgressFill(0);
+    aiProgressLabel.textContent = message;
+    setTimeout(updateSendBtn, ms);
+  }
+
+  function setProgressFill(pct) {
+    sendBtn.classList.toggle('busy', pct != null && pct > 0);
+    aiProgressFill.style.width = (pct == null ? 0 : Math.max(0, Math.min(100, pct))) + '%';
+  }
+
+  function estimateOutputTokens(messages, maxTokens) {
+    const totalChars = messages.reduce((n, m) => n + (m.content ? m.content.length : 0), 0);
+    const approxInputTokens = Math.max(8, Math.ceil(totalChars / 4));
+    const est = Math.ceil(Math.min(approxInputTokens * 0.8, 300));
+    return Math.max(24, Math.min(maxTokens, est));
+  }
+
+  function estimateEtaSeconds(startedAt, pct) {
+    if (!startedAt || pct == null || pct <= 0) return null;
+    const elapsedSec = (Date.now() - startedAt) / 1000;
+    const ratePerSec = pct / elapsedSec;
+    if (!(ratePerSec > 0)) return null;
+    return (100 - pct) / ratePerSec;
+  }
+
+  function formatEta(seconds) {
+    if (seconds == null || !isFinite(seconds) || seconds < 0) return '';
+    if (seconds < 1) return 'almost done';
+    if (seconds < 60) return `~${Math.round(seconds)}s left`;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `~${mins}m ${secs}s left`;
+  }
+
+  function updateSendBtn() {
+    if (state.loading === state.modelKey) {
+      sendBtn.disabled = true;
+      const pct = state.loadingPct;
+      setProgressFill(pct != null ? pct : 0);
+      const eta = formatEta(estimateEtaSeconds(state.loadStartedAt, pct));
+      aiProgressLabel.textContent = pct != null
+        ? `Loading ${pct}%${eta ? ' · ' + eta : ''}`
+        : 'Loading model…';
+      engineStatus.textContent = `Downloading ${MODELS[state.modelKey].label}…`;
+    } else if (state.generating) {
+      sendBtn.disabled = false;
+      const pct = state.genMaxTokens
+        ? Math.min(99, Math.round((state.genTokens / state.genMaxTokens) * 100))
+        : null;
+      setProgressFill(pct != null ? pct : 0);
+      aiProgressLabel.textContent = 'Stop';
+      engineStatus.textContent = 'Generating…';
+    } else if (state.loadError === state.modelKey && !state.pipelinesReady[state.modelKey]) {
+      sendBtn.disabled = false;
+      setProgressFill(0);
+      aiProgressLabel.textContent = 'Retry';
+      engineStatus.textContent = 'Model failed to load';
+    } else {
+      sendBtn.disabled = false;
+      setProgressFill(0);
+      aiProgressLabel.textContent = 'Send';
+      engineStatus.textContent = state.pipelinesReady[state.modelKey]
+        ? `Ready — ${MODELS[state.modelKey].label}`
+        : 'Ready';
+    }
+  }
+
+  /* ------------------------------ Chat log --------------------------------- */
+
+  function scrollToBottom() {
+    chatScroll.scrollTop = chatScroll.scrollHeight;
+  }
+
+  function renderMsgCount() {
+    const n = state.messages.length;
+    msgCount.textContent = n ? `${n} message${n === 1 ? '' : 's'}` : '';
+  }
+
+  function addMessageBubble(role, initialText, modelLabel) {
+    chatEmpty.style.display = 'none';
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + role;
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = role === 'user' ? 'U' : 'P';
+    const col = document.createElement('div');
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = initialText || '';
+    col.appendChild(bubble);
+    if (role === 'assistant') {
+      const tag = document.createElement('div');
+      tag.className = 'model-tag';
+      tag.textContent = modelLabel || '';
+      col.appendChild(tag);
+      wrap._tag = tag;
+    }
+    wrap.appendChild(avatar);
+    wrap.appendChild(col);
+    chatScroll.appendChild(wrap);
+    wrap._bubble = bubble;
+    scrollToBottom();
+    return wrap;
+  }
+
+  function clearChat() {
+    state.messages = [];
+    chatScroll.querySelectorAll('.msg').forEach((n) => n.remove());
+    chatEmpty.style.display = '';
+    renderMsgCount();
+  }
+  clearBtn.addEventListener('click', () => {
+    if (state.generating) return;
+    clearChat();
+  });
+
+  /* ------------------------------ Composer --------------------------------- */
+
+  function autoGrow() {
+    composerInput.style.height = 'auto';
+    composerInput.style.height = Math.min(200, composerInput.scrollHeight) + 'px';
+  }
+  composerInput.addEventListener('input', autoGrow);
+  composerInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendOrStop();
+    }
+  });
+
+  let currentGenWrap = null;
+
+  function sendOrStop() {
+    if (state.generating) {
+      stopGenerating();
+      return;
+    }
+    doSend();
+  }
+  sendBtn.addEventListener('click', sendOrStop);
+
+  function stopGenerating() {
+    // transformers.js doesn't expose a clean mid-stream abort, so the
+    // reliable way to actually stop token generation (not just stop
+    // *listening* to it) is to discard the worker producing it — same
+    // recovery trick used when a model fails to load. The model is cached
+    // by the browser after the first download, so reloading it into the
+    // fresh worker is fast, not a re-download.
+    state.stopRequested = true;
+    worker.terminate();
+    worker = makeWorker();
+    state.pipelinesReady = {};
+    pendingGen.clear();
+    if (currentGenWrap && currentGenWrap._bubble) {
+      currentGenWrap._bubble.textContent += ' [stopped]';
+    }
+    state.generating = false;
+    updateSendBtn();
+    ensureModel(state.modelKey).catch(() => {});
+  }
+
+  async function doSend() {
+    const text = composerInput.value.trim();
+    if (!text || state.generating) return;
+    if (text.length > MAX_INPUT_LENGTH) {
+      flashSendBtn('Message too long', 1600);
+      return;
+    }
+    composerInput.value = '';
+    autoGrow();
+
+    state.messages.push({ role: 'user', content: text });
+    addMessageBubble('user', text);
+    renderMsgCount();
+
+    try {
+      await ensureModel(state.modelKey);
+    } catch {
+      addMessageBubble('assistant', "Sorry — I couldn't load the AI model on this device.", MODELS[state.modelKey].label);
+      return;
+    }
+
+    const modelKeyAtStart = state.modelKey;
+    const wireMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...state.messages];
+    const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true };
+
+    state.generating = true;
+    state.stopRequested = false;
+    state.genTokens = 0;
+    state.genMaxTokens = estimateOutputTokens(wireMessages, MAX_NEW_TOKENS);
+    state.genStartedAt = Date.now();
+    updateSendBtn();
+
+    const wrap = addMessageBubble('assistant', '', MODELS[modelKeyAtStart].label);
+    currentGenWrap = wrap;
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    wrap._bubble.appendChild(cursor);
+    let acc = '';
+
+    try {
+      const text = await runGenerate(modelKeyAtStart, wireMessages, genOpts, (chunk) => {
+        acc += chunk;
+        state.genTokens += 1;
+        wrap._bubble.textContent = acc;
+        wrap._bubble.appendChild(cursor);
+        scrollToBottom();
+        updateSendBtn();
+      });
+      if (!state.stopRequested) {
+        const finalText = (text || acc || '').trim();
+        cursor.remove();
+        wrap._bubble.textContent = finalText || '(no response)';
+        state.messages.push({ role: 'assistant', content: finalText });
+        renderMsgCount();
+      }
+    } catch (err) {
+      if (!state.stopRequested) {
+        cursor.remove();
+        console.error(err);
+        wrap._bubble.textContent = acc ? acc + '\n\n[generation failed]' : 'Something went wrong generating a reply.';
+      }
+    } finally {
+      currentGenWrap = null;
+      state.generating = false;
+      updateSendBtn();
+    }
+  }
+
+  /* -------------------------------- Boot ------------------------------------ */
+
+  renderModelOptions();
+  renderThemes();
+  updateSendBtn();
+  autoGrow();
+  // Start fetching the default model in the background immediately, so Send
+  // is usually instant by the time someone actually types something.
+  ensureModel(state.modelKey).catch(() => {});
+})();
+
+</script>
+</body>
+</html>
