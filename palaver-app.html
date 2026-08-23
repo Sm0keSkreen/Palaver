@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Palaver â offline AI chat</title>
+<title>Palaver — offline AI chat</title>
 <style>
 :root{
-  /* Midnight (default): deep navy, monochrome blue â same palette as Emend */
+  /* Midnight (default): deep navy, monochrome blue — same palette as Emend */
   --bg:#080b11;
   --panel:#0d121a;
   --panel-2:#111826;
@@ -413,19 +413,19 @@ body{
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div class="brand">Palaver</div>
-      <button class="btn ghost small" id="sidebarCollapseBtn" title="Collapse sidebar">â¹</button>
+      <button class="btn ghost small" id="sidebarCollapseBtn" title="Collapse sidebar">‹</button>
     </div>
     <button class="btn primary new-chat-btn" id="newChatBtn">+ New chat</button>
     <div class="chat-list" id="chatList"></div>
   </aside>
-  <button class="btn ghost small sidebar-expand-btn" id="sidebarExpandBtn" title="Show chats">âº</button>
+  <button class="btn ghost small sidebar-expand-btn" id="sidebarExpandBtn" title="Show chats">›</button>
 
   <div class="main-panel">
     <header class="topbar">
       <div class="topbar-spacer"></div>
 
       <div class="menu-wrap model-wrap">
-        <button class="btn ghost" id="modelToggleBtn">Model: <span id="modelBtnLabel">â¦</span></button>
+        <button class="btn ghost" id="modelToggleBtn">Model: <span id="modelBtnLabel">…</span></button>
         <div class="dropdown-panel model-panel" id="modelPanel">
           <div class="label">AI model</div>
           <div class="row" id="aiModelList"></div>
@@ -449,18 +449,18 @@ body{
       <div class="chat-scroll" id="chatScroll">
         <div class="chat-empty" id="chatEmpty">
           <div class="big">Start a conversation</div>
-          <div>Pick a model up top, then say hello. Everything runs on-device â nothing leaves your browser.</div>
+          <div>Pick a model up top, then say hello. Everything runs on-device — nothing leaves your browser.</div>
         </div>
       </div>
 
       <div class="composer">
-        <textarea id="composerInput" rows="1" placeholder="Message Palaverâ¦"></textarea>
+        <textarea id="composerInput" rows="1" placeholder="Message Palaver…"></textarea>
         <button class="btn primary ai-progress-btn" id="sendBtn"><span class="ai-progress-fill" id="aiProgressFill"></span><span class="ai-progress-label" id="aiProgressLabel">Send</span></button>
       </div>
     </main>
 
     <div class="statusbar">
-      <span id="engineStatus">Loadingâ¦</span>
+      <span id="engineStatus">Loading…</span>
       <div class="statusbar-spacer"></div>
       <span id="msgCount"></span>
     </div>
@@ -469,7 +469,7 @@ body{
 
 <script>
 /* Palaver: an offline AI chat. Every model runs entirely on-device via
-   transformers.js â nothing you type ever leaves the browser. Model
+   transformers.js — nothing you type ever leaves the browser. Model
    download and text generation both happen inside a dedicated Web Worker
    (same approach as Emend's AI Check), so the page stays responsive and can
    show live progress instead of freezing while the WASM/WebGPU backend does
@@ -480,16 +480,16 @@ body{
   const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 
   const MODELS = {
-    fast:      { id: 'onnx-community/Qwen2.5-0.5B-Instruct',              label: 'Fast',           meta: '~400MB Â· quickest replies',        dtype: 'q4' },
-    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX',               label: 'Gemma 270M',     meta: '~320MB Â· Google, ultra-light',      dtype: 'q4' },
-    balanced:  { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',         label: 'Balanced',       meta: '~800MB Â· Meta Llama 3.2',           dtype: 'q4' },
-    gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',                 label: 'Gemma 1B',       meta: '~860MB Â· Google, newer arch',       dtype: 'q4' },
-    better:    { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',               label: 'Better',         meta: '~1.4GB Â· well-rounded',             dtype: 'q4' },
-    qwen15b:   { id: 'onnx-community/Qwen2.5-1.5B-Instruct',              label: 'Qwen 1.5B',      meta: '~1.8GB Â· Alibaba, well-rounded',    dtype: 'q4' },
-    deepseek:  { id: 'onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX', label: 'DeepSeek R1 1.5B', meta: '~2.0GB Â· reasoning, slower replies', dtype: 'q4' },
-    llama3b:   { id: 'onnx-community/Llama-3.2-3B-Instruct-ONNX',         label: 'Llama 3.2 3B',   meta: '~3.4GB Â· biggest, highest quality', dtype: 'q4' },
-    lfm2_1b:   { id: 'onnx-community/LFM2-1.2B-ONNX',                     label: 'LFM2 1.2B',      meta: '~700MB Â· Liquid AI, built for edge', dtype: 'q4' },
-    lfm2_3b:   { id: 'onnx-community/LFM2-2.6B-ONNX',                     label: 'LFM2 2.6B',      meta: '~1.5GB Â· Liquid AI, beats Llama 3B', dtype: 'q4' },
+    fast:      { id: 'onnx-community/Qwen2.5-0.5B-Instruct',              label: 'Fast',           meta: '~400MB · quickest replies',        dtype: 'q4' },
+    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX',               label: 'Gemma 270M',     meta: '~320MB · Google, ultra-light',      dtype: 'q4' },
+    balanced:  { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',         label: 'Balanced',       meta: '~800MB · Meta Llama 3.2',           dtype: 'q4' },
+    gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',                 label: 'Gemma 1B',       meta: '~860MB · Google, newer arch',       dtype: 'q4' },
+    better:    { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',               label: 'Better',         meta: '~1.4GB · well-rounded',             dtype: 'q4' },
+    qwen15b:   { id: 'onnx-community/Qwen2.5-1.5B-Instruct',              label: 'Qwen 1.5B',      meta: '~1.8GB · Alibaba, well-rounded',    dtype: 'q4' },
+    deepseek:  { id: 'onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX', label: 'DeepSeek R1 1.5B', meta: '~2.0GB · reasoning, slower replies', dtype: 'q4' },
+    llama3b:   { id: 'onnx-community/Llama-3.2-3B-Instruct-ONNX',         label: 'Llama 3.2 3B',   meta: '~3.4GB · biggest, highest quality', dtype: 'q4' },
+    lfm2_1b:   { id: 'onnx-community/LFM2-1.2B-ONNX',                     label: 'LFM2 1.2B',      meta: '~700MB · Liquid AI, built for edge', dtype: 'q4' },
+    lfm2_3b:   { id: 'onnx-community/LFM2-2.6B-ONNX',                     label: 'LFM2 2.6B',      meta: '~1.5GB · Liquid AI, beats Llama 3B', dtype: 'q4' },
   };
   const DEFAULT_MODEL = 'fast';
 
@@ -723,7 +723,7 @@ body{
 
     // Keep at most one model resident at a time. Every pipeline that loads
     // successfully stays in the worker's memory until the worker is
-    // discarded â loading a second model on top of an already-loaded one
+    // discarded — loading a second model on top of an already-loaded one
     // is exactly what pushes total WASM/GPU memory over a device's ceiling.
     // Free whatever's currently loaded before pulling in a different model.
     const otherResident = Object.keys(state.pipelinesReady).find((k) => state.pipelinesReady[k] && k !== key);
@@ -864,9 +864,9 @@ body{
       setProgressFill(pct != null ? pct : 0);
       const eta = formatEta(estimateEtaSeconds(state.loadStartedAt, pct));
       aiProgressLabel.textContent = pct != null
-        ? `Loading ${pct}%${eta ? ' Â· ' + eta : ''}`
-        : 'Loading modelâ¦';
-      engineStatus.textContent = `Downloading ${MODELS[state.modelKey].label}â¦`;
+        ? `Loading ${pct}%${eta ? ' · ' + eta : ''}`
+        : 'Loading model…';
+      engineStatus.textContent = `Downloading ${MODELS[state.modelKey].label}…`;
     } else if (state.generating) {
       sendBtn.disabled = false;
       const pct = state.genMaxTokens
@@ -874,7 +874,7 @@ body{
         : null;
       setProgressFill(pct != null ? pct : 0);
       aiProgressLabel.textContent = 'Stop';
-      engineStatus.textContent = 'Generatingâ¦';
+      engineStatus.textContent = 'Generating…';
     } else if (state.loadError === state.modelKey && !state.pipelinesReady[state.modelKey]) {
       sendBtn.disabled = false;
       setProgressFill(0);
@@ -885,7 +885,7 @@ body{
       setProgressFill(0);
       aiProgressLabel.textContent = 'Send';
       engineStatus.textContent = state.pipelinesReady[state.modelKey]
-        ? `Ready â ${MODELS[state.modelKey].label}`
+        ? `Ready — ${MODELS[state.modelKey].label}`
         : 'Ready';
     }
   }
@@ -929,7 +929,7 @@ body{
   }
 
   /* --------------------------- Chat history (sidebar) ---------------------- */
-  // Every conversation is stored client-side only, in localStorage â nothing
+  // Every conversation is stored client-side only, in localStorage — nothing
   // ever leaves the browser, same as the model inference itself.
 
   function loadChatsFromStorage() {
@@ -955,7 +955,7 @@ body{
     const firstUser = chat.messages.find((m) => m.role === 'user');
     if (!firstUser) return 'New chat';
     const t = firstUser.content.trim().replace(/\s+/g, ' ');
-    return t.length > 42 ? t.slice(0, 42) + 'â¦' : t;
+    return t.length > 42 ? t.slice(0, 42) + '…' : t;
   }
 
   function findChat(id) {
@@ -983,7 +983,7 @@ body{
       title.textContent = titleForChat(chat);
       const del = document.createElement('span');
       del.className = 'del';
-      del.textContent = 'â';
+      del.textContent = '✕';
       del.title = 'Delete chat';
       let confirming = false;
       let revertTimer = null;
@@ -992,12 +992,12 @@ body{
         if (!confirming) {
           confirming = true;
           del.classList.add('confirm');
-          del.textContent = 'â';
+          del.textContent = '✓';
           del.title = 'Click again to delete';
           revertTimer = setTimeout(() => {
             confirming = false;
             del.classList.remove('confirm');
-            del.textContent = 'â';
+            del.textContent = '✕';
             del.title = 'Delete chat';
           }, 2200);
           return;
@@ -1169,7 +1169,7 @@ body{
   function stopGenerating() {
     // transformers.js doesn't expose a clean mid-stream abort, so the
     // reliable way to actually stop token generation (not just stop
-    // *listening* to it) is to discard the worker producing it â same
+    // *listening* to it) is to discard the worker producing it — same
     // recovery trick used when a model fails to load. The model is cached
     // by the browser after the first download, so reloading it into the
     // fresh worker is fast, not a re-download.
@@ -1204,7 +1204,7 @@ body{
     try {
       await ensureModel(state.modelKey);
     } catch {
-      addMessageBubble('assistant', "Sorry â I couldn't load the AI model on this device.", MODELS[state.modelKey].label);
+      addMessageBubble('assistant', "Sorry — I couldn't load the AI model on this device.", MODELS[state.modelKey].label);
       return;
     }
 
