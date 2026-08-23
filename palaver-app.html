@@ -718,6 +718,24 @@ body{
   function ensureModel(key) {
     if (state.pipelinesReady[key]) return Promise.resolve();
     if (state.loadPromises[key]) return state.loadPromises[key];
+
+    // Keep at most one model resident at a time. Every pipeline that loads
+    // successfully stays in the worker's memory until the worker is
+    // discarded — loading a second model on top of an already-loaded one
+    // is exactly what pushes total WASM/GPU memory over a device's ceiling.
+    // Free whatever's currently loaded before pulling in a different model.
+    const otherResident = Object.keys(state.pipelinesReady).find((k) => state.pipelinesReady[k] && k !== key);
+    if (otherResident) {
+      Object.keys(loadResolvers).forEach((k) => {
+        const r = loadResolvers[k];
+        delete loadResolvers[k];
+        if (r) r.reject(new Error('cancelled: switching models'));
+      });
+      worker.terminate();
+      worker = makeWorker();
+      state.pipelinesReady = {};
+    }
+
     const m = MODELS[key];
     state.loading = key;
     state.loadingPct = null;
