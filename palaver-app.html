@@ -511,10 +511,13 @@ body{
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
   // How long a loaded model sits idle (no generation, no new load) before its
-  // worker is discarded to free WASM/GPU memory. The browser cache keeps the
-  // weights, so the next message just reloads into a fresh worker quickly —
-  // it's not a re-download, same as the existing stop/fail recovery paths.
-  const IDLE_UNLOAD_MS = 5 * 60 * 1000;
+  // worker is discarded to free WASM/GPU memory. 0 means "unload as soon as
+  // it's not being used" — the check still runs via setTimeout so it fires
+  // right after the current call stack clears (letting the UI update first),
+  // not literally mid-function. The browser cache keeps the weights, so the
+  // next message just reloads into a fresh worker quickly — it's not a
+  // re-download, same as the existing stop/fail recovery paths.
+  const IDLE_UNLOAD_MS = 0;
 
   const THEMES = [
     { id: 'midnight', label: 'Midnight', bg: '#080b11', accent: '#3e82f7' },
