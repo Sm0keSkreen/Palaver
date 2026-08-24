@@ -485,14 +485,22 @@ body{
 
   const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 
+  // Mirror of a handful of models' weights, pre-split into <20MB chunks and
+  // hosted in our own GitHub repo so jsDelivr can serve them — a fallback
+  // path for anyone who can't reach huggingface.co directly. Only models
+  // listed here (via `cdnFolder`) use it; everything else loads from HF
+  // exactly as before. See palaver-models repo's onnx/*.manifest.json for
+  // the chunk lists this depends on.
+  const CDN_REPO = 'https://cdn.jsdelivr.net/gh/Sm0keSkreen/palaver-models@main/';
+
   const MODELS = {
     fast:      { id: 'onnx-community/Qwen2.5-0.5B-Instruct',              label: 'Fast',           meta: '~400MB · quickest replies',        dtype: 'q4' },
-    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX',               label: 'Gemma 270M',     meta: '~320MB · Google, ultra-light',      dtype: 'q4' },
-    balanced:  { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',         label: 'Balanced',       meta: '~800MB · Meta Llama 3.2',           dtype: 'q4' },
-    gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',                 label: 'Gemma 1B',       meta: '~860MB · Google, newer arch',       dtype: 'q4' },
+    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX',               label: 'Gemma 270M',     meta: '~320MB · Google, ultra-light',      dtype: 'q4', cdnFolder: 'gemma270m' },
+    balanced:  { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',         label: 'Balanced',       meta: '~800MB · Meta Llama 3.2',           dtype: 'q4', cdnFolder: 'balanced' },
+    gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',                 label: 'Gemma 1B',       meta: '~860MB · Google, newer arch',       dtype: 'q4', cdnFolder: 'gemma1b' },
     better:    { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',               label: 'Better',         meta: '~1.4GB · well-rounded',             dtype: 'q4' },
-    qwen15b:   { id: 'onnx-community/Qwen2.5-1.5B-Instruct',              label: 'Qwen 1.5B',      meta: '~1.8GB · Alibaba, well-rounded',    dtype: 'q4' },
-    deepseek:  { id: 'onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX', label: 'DeepSeek R1 1.5B', meta: '~2.0GB · reasoning, slower replies', dtype: 'q4' },
+    qwen15b:   { id: 'onnx-community/Qwen2.5-1.5B-Instruct',              label: 'Qwen 1.5B',      meta: '~1.8GB · Alibaba, well-rounded',    dtype: 'q4', cdnFolder: 'qwen15b' },
+    deepseek:  { id: 'onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX', label: 'DeepSeek R1 1.5B', meta: '~2.0GB · reasoning, slower replies', dtype: 'q4', cdnFolder: 'deepseek' },
     llama3b:   { id: 'onnx-community/Llama-3.2-3B-Instruct-ONNX',         label: 'Llama 3.2 3B',   meta: '~3.4GB · biggest, highest quality', dtype: 'q4' },
     lfm2_1b:   { id: 'onnx-community/LFM2-1.2B-ONNX',                     label: 'LFM2 1.2B',      meta: '~700MB · Liquid AI, built for edge', dtype: 'q4' },
     lfm2_3b:   { id: 'onnx-community/LFM2-2.6B-ONNX',                     label: 'LFM2 2.6B',      meta: '~1.5GB · Liquid AI, beats Llama 3B', dtype: 'q4' },
@@ -578,6 +586,10 @@ body{
     let transformersMod = null;
     const pipelines = {};
     let devicePromise = null;
+    let jsDelivrCache = null;
+
+    const HF_REMOTE_HOST = 'https://huggingface.co/';
+    const HF_REMOTE_PATH_TEMPLATE = '{model}/resolve/{revision}/';
 
     async function pickDevice() {
       if (!('gpu' in self.navigator)) return 'wasm';
@@ -589,7 +601,97 @@ body{
       }
     }
 
-    async function loadPipeline(modelId, dtype, device, onProgress) {
+    // Model weight URLs always look like ".../onnx/<name>.onnx" or
+    // ".../onnx/<name>.onnx_data[_N]" — the only files that are ever split
+    // into chunks in the CDN mirror. Everything else (tokenizer.json,
+    // config.json, etc.) is a normal single small file.
+    function looksLikeModelWeightFile(url) {
+      return /\\/onnx\\/[^/]+\\.onnx(_data(_\\d+)?)?$/.test(url);
+    }
+
+    async function sha256Hex(buf) {
+      const digest = await crypto.subtle.digest('SHA-256', buf);
+      return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // A Cache-API-shaped object (match/put) that transformers.js will use
+    // in place of its own browser cache when loading from the CDN mirror.
+    // For ordinary small files it's a thin pass-through to a real Cache
+    // Storage bucket. For a chunked weight file (recognized by a sibling
+    // "<file>.manifest.json"), it lazily fetches each chunk, verifies its
+    // SHA-256 against the manifest, and streams the bytes back so
+    // transformers.js's own download-progress UI keeps working — then
+    // stashes the fully-assembled file in the real cache in the background
+    // so the next load of the same model is instant.
+    function getJsDelivrCache() {
+      if (jsDelivrCache) return jsDelivrCache;
+      const realCachePromise = ('caches' in self)
+        ? self.caches.open('palaver-jsdelivr-v1').catch(() => null)
+        : Promise.resolve(null);
+      jsDelivrCache = {
+        async match(key) {
+          const realCache = await realCachePromise;
+          if (realCache) {
+            try {
+              const hit = await realCache.match(key);
+              if (hit) return hit;
+            } catch { /* ignore cache read errors */ }
+          }
+          if (!looksLikeModelWeightFile(key)) return undefined;
+          let manifest;
+          try {
+            const mRes = await fetch(key + '.manifest.json');
+            if (!mRes.ok) return undefined; // not a chunked file — fall through to a normal fetch
+            manifest = await mRes.json();
+          } catch {
+            return undefined;
+          }
+          const baseUrl = key.slice(0, key.lastIndexOf('/') + 1);
+          const collected = [];
+          let idx = 0;
+          const stream = new ReadableStream({
+            async pull(controller) {
+              if (idx >= manifest.parts.length) {
+                controller.close();
+                realCachePromise.then(async (cacheToStore) => {
+                  if (!cacheToStore) return;
+                  try {
+                    const fullBlob = new Blob(collected);
+                    await cacheToStore.put(key, new Response(fullBlob, {
+                      headers: { 'content-length': String(manifest.totalSize), 'content-type': 'application/octet-stream' },
+                    }));
+                  } catch { /* best-effort caching only */ }
+                });
+                return;
+              }
+              const part = manifest.parts[idx++];
+              try {
+                const res = await fetch(baseUrl + part.name);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const buf = new Uint8Array(await res.arrayBuffer());
+                const hash = await sha256Hex(buf.buffer);
+                if (hash !== part.sha256) throw new Error('checksum mismatch for ' + part.name);
+                collected.push(buf);
+                controller.enqueue(buf);
+              } catch (err) {
+                controller.error(new Error('CDN chunk fetch failed (' + part.name + '): ' + err.message));
+              }
+            },
+          });
+          return new Response(stream, {
+            headers: { 'content-length': String(manifest.totalSize), 'content-type': 'application/octet-stream' },
+          });
+        },
+        async put(key, response) {
+          const realCache = await realCachePromise;
+          if (!realCache) return;
+          try { await realCache.put(key, response); } catch { /* best-effort caching only */ }
+        },
+      };
+      return jsDelivrCache;
+    }
+
+    async function loadPipeline(modelId, dtype, device, cdnFolder, onProgress) {
       if (!transformersMod) {
         transformersMod = await import(${JSON.stringify(TRANSFORMERS_CDN)});
         // Forcing single-threaded WASM avoids onnxruntime-web sizing its
@@ -598,7 +700,20 @@ body{
         // allocation on machines with plenty of free RAM.
         transformersMod.env.backends.onnx.wasm.numThreads = 1;
       }
-      return transformersMod.pipeline('text-generation', modelId, {
+      let pipelineModelId = modelId;
+      if (cdnFolder) {
+        transformersMod.env.remoteHost = ${JSON.stringify(CDN_REPO)};
+        transformersMod.env.remotePathTemplate = '{model}/';
+        transformersMod.env.useCustomCache = true;
+        transformersMod.env.customCache = getJsDelivrCache();
+        pipelineModelId = cdnFolder;
+      } else {
+        transformersMod.env.remoteHost = HF_REMOTE_HOST;
+        transformersMod.env.remotePathTemplate = HF_REMOTE_PATH_TEMPLATE;
+        transformersMod.env.useCustomCache = false;
+        transformersMod.env.customCache = null;
+      }
+      return transformersMod.pipeline('text-generation', pipelineModelId, {
         dtype, device, progress_callback: onProgress,
       });
     }
@@ -606,7 +721,7 @@ body{
     self.onmessage = async (e) => {
       const msg = e.data;
       if (msg.type === 'loadModel') {
-        const { key, modelId, dtype } = msg;
+        const { key, modelId, dtype, cdnFolder } = msg;
         try {
           if (!devicePromise) devicePromise = pickDevice();
           let device = await devicePromise;
@@ -621,11 +736,11 @@ body{
           };
           let generator;
           try {
-            generator = await loadPipeline(modelId, dtype, device, onProgress);
+            generator = await loadPipeline(modelId, dtype, device, cdnFolder, onProgress);
           } catch (err) {
             if (device !== 'wasm') {
               device = 'wasm';
-              generator = await loadPipeline(modelId, dtype, 'wasm', onProgress);
+              generator = await loadPipeline(modelId, dtype, 'wasm', cdnFolder, onProgress);
             } else {
               throw err;
             }
@@ -763,7 +878,7 @@ body{
     state.loadError = null;
     updateSendBtn();
     const promise = new Promise((resolve, reject) => { loadResolvers[key] = { resolve, reject }; });
-    worker.postMessage({ type: 'loadModel', key, modelId: m.id, dtype: m.dtype });
+    worker.postMessage({ type: 'loadModel', key, modelId: m.id, dtype: m.dtype, cdnFolder: m.cdnFolder || null });
     const tracked = promise.finally(() => {
       if (state.loading === key) state.loading = null;
       delete state.loadPromises[key];
