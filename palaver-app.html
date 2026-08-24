@@ -510,6 +510,11 @@ body{
   const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail.';
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
+  // How long a loaded model sits idle (no generation, no new load) before its
+  // worker is discarded to free WASM/GPU memory. The browser cache keeps the
+  // weights, so the next message just reloads into a fresh worker quickly —
+  // it's not a re-download, same as the existing stop/fail recovery paths.
+  const IDLE_UNLOAD_MS = 5 * 60 * 1000;
 
   const THEMES = [
     { id: 'midnight', label: 'Midnight', bg: '#080b11', accent: '#3e82f7' },
@@ -777,7 +782,32 @@ body{
   let workerReqSeq = 0;
   const pendingGen = new Map(); // reqId -> { resolve, reject, onChunk }
 
+  let idleUnloadTimer = null;
+  function cancelIdleUnloadTimer() {
+    if (idleUnloadTimer) { clearTimeout(idleUnloadTimer); idleUnloadTimer = null; }
+  }
+  function resetIdleUnloadTimer() {
+    cancelIdleUnloadTimer();
+    idleUnloadTimer = setTimeout(unloadIdleModel, IDLE_UNLOAD_MS);
+  }
+  function unloadIdleModel() {
+    idleUnloadTimer = null;
+    // Never discard a worker that's mid-load or mid-generation — just push
+    // the check out and try again once whatever's running settles.
+    if (state.generating || state.loading) { resetIdleUnloadTimer(); return; }
+    const resident = Object.keys(state.pipelinesReady).find((k) => state.pipelinesReady[k]);
+    if (!resident) return; // nothing loaded, nothing to free
+    worker.terminate();
+    worker = makeWorker();
+    state.pipelinesReady = {};
+    renderModelOptions();
+    updateSendBtn();
+  }
+
   function makeWorker() {
+    // Every replacement worker starts with a clean slate, so any pending
+    // idle-unload check from the worker being replaced is stale.
+    cancelIdleUnloadTimer();
     const blob = new Blob([WORKER_SRC], { type: 'text/javascript' });
     const url = URL.createObjectURL(blob);
     const w = new Worker(url, { type: 'module' });
@@ -797,6 +827,7 @@ body{
       if (state.loading === msg.key) { state.loadingPct = msg.pct; updateSendBtn(); }
     } else if (msg.type === 'loadDone') {
       state.pipelinesReady[msg.key] = true;
+      resetIdleUnloadTimer();
       settleLoad(msg.key, null);
     } else if (msg.type === 'loadError') {
       settleLoad(msg.key, msg.message);
@@ -1401,6 +1432,10 @@ body{
     } finally {
       currentGenWrap = null;
       state.generating = false;
+      // Generation just used the model; the idle clock starts fresh from here
+      // (the model may already have been unloaded by stopGenerating's own
+      // worker swap, in which case there's nothing to arm a timer for).
+      if (state.pipelinesReady[modelKeyAtStart]) resetIdleUnloadTimer();
       updateSendBtn();
     }
   }
