@@ -455,7 +455,7 @@ body{
       <div class="chat-scroll" id="chatScroll">
         <div class="chat-empty" id="chatEmpty">
           <div class="big">Start a conversation</div>
-          <div>Pick a model up top, then say hello. Everything runs on-device — nothing leaves your browser.</div>
+          <div>Everything runs on-device — nothing leaves your browser.</div>
         </div>
       </div>
 
@@ -494,10 +494,18 @@ body{
   const CDN_REPO = 'https://cdn.jsdelivr.net/gh/Sm0keSkreen/palaver-models@main/';
 
   const MODELS = {
+    fast:      { id: 'onnx-community/Qwen2.5-0.5B-Instruct',              label: 'Fast',           meta: '~400MB · quickest replies',        dtype: 'q4' },
     gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX',               label: 'Gemma 270M',     meta: '~320MB · Google, ultra-light',      dtype: 'q4', cdnFolder: 'gemma270m' },
+    balanced:  { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',         label: 'Balanced',       meta: '~800MB · Meta Llama 3.2',           dtype: 'q4', cdnFolder: 'balanced' },
     gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',                 label: 'Gemma 1B',       meta: '~860MB · Google, newer arch',       dtype: 'q4', cdnFolder: 'gemma1b' },
+    better:    { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',               label: 'Better',         meta: '~1.4GB · well-rounded',             dtype: 'q4' },
+    qwen15b:   { id: 'onnx-community/Qwen2.5-1.5B-Instruct',              label: 'Qwen 1.5B',      meta: '~1.8GB · Alibaba, well-rounded',    dtype: 'q4', cdnFolder: 'qwen15b' },
+    deepseek:  { id: 'onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX', label: 'DeepSeek R1 1.5B', meta: '~2.0GB · reasoning, slower replies', dtype: 'q4', cdnFolder: 'deepseek' },
+    llama3b:   { id: 'onnx-community/Llama-3.2-3B-Instruct-ONNX',         label: 'Llama 3.2 3B',   meta: '~3.4GB · biggest, highest quality', dtype: 'q4' },
+    lfm2_1b:   { id: 'onnx-community/LFM2-1.2B-ONNX',                     label: 'LFM2 1.2B',      meta: '~700MB · Liquid AI, built for edge', dtype: 'q4' },
+    lfm2_3b:   { id: 'onnx-community/LFM2-2.6B-ONNX',                     label: 'LFM2 2.6B',      meta: '~1.5GB · Liquid AI, beats Llama 3B', dtype: 'q4' },
   };
-  const DEFAULT_MODEL = 'gemma270m';
+  const DEFAULT_MODEL = 'fast';
 
   const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail.';
   const MAX_NEW_TOKENS = 768;
