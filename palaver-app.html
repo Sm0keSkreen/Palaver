@@ -981,6 +981,28 @@ body{
     return tracked;
   }
 
+  // Defense in depth against the strict-alternation requirement above: even
+  // after the fixes to ensureModel()'s catch, stopGenerating(), and
+  // doSend()'s catch, a chat that was already broken before this fix
+  // shipped (saved to localStorage with two consecutive same-role turns)
+  // would otherwise keep failing forever with no way to recover short of
+  // starting a new chat. Run this on the outgoing message list right before
+  // every send instead of trusting history to already be well-formed —
+  // merging consecutive same-role turns together self-heals an already-
+  // broken chat, and costs nothing when history is already fine.
+  function alternateMessages(msgs) {
+    const out = [];
+    for (const m of msgs) {
+      const last = out[out.length - 1];
+      if (last && last.role === m.role) {
+        last.content = last.content ? last.content + '\n\n' + m.content : m.content;
+      } else {
+        out.push({ role: m.role, content: m.content });
+      }
+    }
+    return out;
+  }
+
   function runGenerate(key, messages, genOpts, onChunk) {
     return new Promise((resolve, reject) => {
       const reqId = ++workerReqSeq;
@@ -1416,9 +1438,30 @@ body{
     worker.terminate();
     worker = makeWorker();
     state.pipelinesReady = {};
+    // pendingGen.clear() below drops the in-flight generate's resolvers
+    // without ever calling resolve/reject, so doSend()'s `await
+    // runGenerate(...)` simply hangs forever — its try/catch/finally never
+    // runs. That means THIS function is the only place a stopped turn ever
+    // gets recorded, and it must record something: every model here enforces
+    // strict user/assistant alternation in its chat template (Gemma throws
+    // "Conversation roles must alternate..." otherwise), and doSend() always
+    // pushes the user's message before generation starts. Leaving that
+    // without a paired assistant reply means the very next send pushes a
+    // second consecutive user turn and every future generation on this chat
+    // fails outright — so the partial reply (or a placeholder, if nothing
+    // streamed in yet) is saved here as the assistant turn.
     pendingGen.clear();
     if (currentGenWrap && currentGenWrap._bubble) {
-      currentGenWrap._bubble.textContent += ' [stopped]';
+      const partial = currentGenWrap._bubble.textContent || '';
+      currentGenWrap._bubble.textContent = partial + ' [stopped]';
+      const m = MODELS[state.modelKey];
+      state.messages.push({
+        role: 'assistant',
+        content: partial.trim() || '(stopped before any reply)',
+        modelLabel: m ? m.label : undefined,
+      });
+      renderMsgCount();
+      persistCurrentChat();
     }
     state.generating = false;
     updateSendBtn();
@@ -1446,11 +1489,19 @@ body{
       const base = "Sorry — I couldn't load the AI model on this device.";
       const msg = (state.debugMode && err && err.message) ? `${base}\n\nDebug: ${err.message}` : base;
       addMessageBubble('assistant', msg, MODELS[state.modelKey].label);
+      // The user turn above was already pushed to state.messages before this
+      // load attempt — every model here requires strictly alternating
+      // user/assistant turns, so a load failure needs a paired assistant
+      // turn recorded too, or the next send pushes a second consecutive
+      // user turn and breaks generation even after a model that does load.
+      state.messages.push({ role: 'assistant', content: msg, modelLabel: MODELS[state.modelKey].label });
+      renderMsgCount();
+      persistCurrentChat();
       return;
     }
 
     const modelKeyAtStart = state.modelKey;
-    const wireMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))];
+    const wireMessages = alternateMessages([{ role: 'system', content: SYSTEM_PROMPT }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))]);
     const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true };
 
     state.generating = true;
@@ -1490,6 +1541,19 @@ body{
         console.error(err);
         const detail = (state.debugMode && err && err.message) ? ` (${err.message})` : '';
         wrap._bubble.textContent = acc ? acc + '\n\n[generation failed' + detail + ']' : 'Something went wrong generating a reply.' + detail;
+        // Same reason as stopGenerating(): the user's turn was already
+        // pushed to state.messages before generation started, and every
+        // model here requires strictly alternating user/assistant turns in
+        // its chat template. Without a paired assistant turn recorded here,
+        // the next message sent would push a second consecutive user turn
+        // and fail the same way even on a model that was working fine.
+        state.messages.push({
+          role: 'assistant',
+          content: acc.trim() || '(reply failed to generate)',
+          modelLabel: MODELS[modelKeyAtStart] ? MODELS[modelKeyAtStart].label : undefined,
+        });
+        renderMsgCount();
+        persistCurrentChat();
       }
     } finally {
       currentGenWrap = null;
