@@ -493,18 +493,25 @@ body{
   const CDN_REPO = 'https://cdn.jsdelivr.net/gh/Sm0keSkreen/palaver-models@main/';
 
   const MODELS = {
-    fast:      { id: 'onnx-community/Qwen2.5-0.5B-Instruct',              label: 'Fast',           meta: '~400MB · quickest replies',        dtype: 'q4' },
-    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX',               label: 'Gemma 270M',     meta: '~320MB · Google, ultra-light',      dtype: 'q4', cdnFolder: 'gemma270m' },
-    balanced:  { id: 'onnx-community/Llama-3.2-1B-Instruct-ONNX',         label: 'Balanced',       meta: '~800MB · Meta Llama 3.2',           dtype: 'q4', cdnFolder: 'balanced' },
-    gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',                 label: 'Gemma 1B',       meta: '~860MB · Google, newer arch',       dtype: 'q4', cdnFolder: 'gemma1b' },
-    better:    { id: 'HuggingFaceTB/SmolLM2-1.7B-Instruct',               label: 'Better',         meta: '~1.4GB · well-rounded',             dtype: 'q4' },
-    qwen15b:   { id: 'onnx-community/Qwen2.5-1.5B-Instruct',              label: 'Qwen 1.5B',      meta: '~1.8GB · Alibaba, well-rounded',    dtype: 'q4', cdnFolder: 'qwen15b' },
-    deepseek:  { id: 'onnx-community/DeepSeek-R1-Distill-Qwen-1.5B-ONNX', label: 'DeepSeek R1 1.5B', meta: '~2.0GB · reasoning, slower replies', dtype: 'q4', cdnFolder: 'deepseek' },
-    llama3b:   { id: 'onnx-community/Llama-3.2-3B-Instruct-ONNX',         label: 'Llama 3.2 3B',   meta: '~3.4GB · biggest, highest quality', dtype: 'q4' },
-    lfm2_1b:   { id: 'onnx-community/LFM2-1.2B-ONNX',                     label: 'LFM2 1.2B',      meta: '~700MB · Liquid AI, built for edge', dtype: 'q4' },
-    lfm2_3b:   { id: 'onnx-community/LFM2-2.6B-ONNX',                     label: 'LFM2 2.6B',      meta: '~1.5GB · Liquid AI, beats Llama 3B', dtype: 'q4' },
+    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX', label: 'Gemma 270M', meta: '~320MB · Google, ultra-light',     dtype: 'q4', cdnFolder: 'gemma270m' },
+    gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',   label: 'Gemma 1B',   meta: '~860MB · Google, newer arch',      dtype: 'q4', cdnFolder: 'gemma1b' },
+    // Gemma 4's smallest tier. It's multimodal under the hood (vision +
+    // audio encoders are part of every download, even though this app only
+    // ever sends text) and uses very large per-layer embedding tables, so
+    // despite the "2B effective params" name the real download is ~3.4GB —
+    // several times heavier than Gemma 1B above, and in the same size class
+    // as models that can fail to load at all on lower-memory devices. It
+    // also doesn't fit transformers.js's normal pipeline() helper: it needs
+    // its own processor/model classes and a different message shape, which
+    // is why it carries the `task` field below (see loadPipeline/generate
+    // in WORKER_SRC for the branch this triggers).
+    gemma4e2b: {
+      id: 'onnx-community/gemma-4-E2B-it-ONNX', label: 'Gemma 4 E2B',
+      meta: '~3.4GB · Google, newest architecture, large download',
+      dtype: 'q4f16', task: 'gemma4',
+    },
   };
-  const DEFAULT_MODEL = 'fast';
+  const DEFAULT_MODEL = 'gemma270m';
 
   const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail.';
   const MAX_NEW_TOKENS = 768;
@@ -698,7 +705,7 @@ body{
       return jsDelivrCache;
     }
 
-    async function loadPipeline(modelId, dtype, device, cdnFolder, onProgress) {
+    async function loadPipeline(modelId, dtype, device, cdnFolder, task, onProgress) {
       if (!transformersMod) {
         transformersMod = await import(${JSON.stringify(TRANSFORMERS_CDN)});
         // Forcing single-threaded WASM avoids onnxruntime-web sizing its
@@ -720,6 +727,19 @@ body{
         transformersMod.env.useCustomCache = false;
         transformersMod.env.customCache = null;
       }
+      // Gemma 4 is a multimodal any-to-any model — transformers.js has no
+      // pipeline('text-generation', ...) support for it, so it's loaded via
+      // its own processor + model classes instead (mirrors the model
+      // card's documented Transformers.js usage exactly).
+      if (task === 'gemma4') {
+        const [processor, model] = await Promise.all([
+          transformersMod.AutoProcessor.from_pretrained(pipelineModelId),
+          transformersMod.Gemma4ForConditionalGeneration.from_pretrained(pipelineModelId, {
+            dtype, device, progress_callback: onProgress,
+          }),
+        ]);
+        return { isGemma4: true, processor, model };
+      }
       return transformersMod.pipeline('text-generation', pipelineModelId, {
         dtype, device, progress_callback: onProgress,
       });
@@ -728,7 +748,7 @@ body{
     self.onmessage = async (e) => {
       const msg = e.data;
       if (msg.type === 'loadModel') {
-        const { key, modelId, dtype, cdnFolder } = msg;
+        const { key, modelId, dtype, cdnFolder, task } = msg;
         try {
           if (!devicePromise) devicePromise = pickDevice();
           let device = await devicePromise;
@@ -743,11 +763,11 @@ body{
           };
           let generator;
           try {
-            generator = await loadPipeline(modelId, dtype, device, cdnFolder, onProgress);
+            generator = await loadPipeline(modelId, dtype, device, cdnFolder, task, onProgress);
           } catch (err) {
             if (device !== 'wasm') {
               device = 'wasm';
-              generator = await loadPipeline(modelId, dtype, 'wasm', cdnFolder, onProgress);
+              generator = await loadPipeline(modelId, dtype, 'wasm', cdnFolder, task, onProgress);
             } else {
               throw err;
             }
@@ -762,6 +782,46 @@ body{
         try {
           const pipe = pipelines[key];
           if (!pipe) throw new Error('model not loaded: ' + key);
+          if (pipe.isGemma4) {
+            // Gemma 4's own model card shows message content as an array of
+            // typed parts ({ type: 'text', text: ... }), but that shape
+            // actually throws inside this model's chat template ("Unknown
+            // ArrayValue filter: trim") — live-tested against the real
+            // processor before shipping this. Plain string content (the
+            // same shape every other model in this app already uses) works
+            // correctly, so messages are passed through unchanged.
+            const { processor, model } = pipe;
+            const prompt = processor.apply_chat_template(messages, {
+              add_generation_prompt: true,
+              enable_thinking: false,
+            });
+            const inputs = await processor(prompt, null, null, { add_special_tokens: false });
+            const streamer = new transformersMod.TextStreamer(processor.tokenizer, {
+              skip_prompt: true,
+              skip_special_tokens: true,
+              callback_function: (chunk) => {
+                self.postMessage({ type: 'genChunk', reqId, text: chunk });
+              },
+            });
+            // Google's documented sampling defaults for Gemma 4, not this
+            // app's usual temperature/top_p — do_sample/max_new_tokens still
+            // come from genOpts so Stop/length behave the same as other models.
+            const outputs = await model.generate({
+              ...inputs,
+              max_new_tokens: genOpts.max_new_tokens,
+              do_sample: genOpts.do_sample,
+              temperature: 1.0,
+              top_p: 0.95,
+              top_k: 64,
+              streamer,
+            });
+            const decoded = processor.batch_decode(
+              outputs.slice(null, [inputs.input_ids.dims.at(-1), null]),
+              { skip_special_tokens: true },
+            );
+            self.postMessage({ type: 'genDone', reqId, text: decoded[0] });
+            return;
+          }
           const streamer = new transformersMod.TextStreamer(pipe.tokenizer, {
             skip_prompt: true,
             skip_special_tokens: true,
@@ -911,7 +971,7 @@ body{
     state.loadError = null;
     updateSendBtn();
     const promise = new Promise((resolve, reject) => { loadResolvers[key] = { resolve, reject }; });
-    worker.postMessage({ type: 'loadModel', key, modelId: m.id, dtype: m.dtype, cdnFolder: m.cdnFolder || null });
+    worker.postMessage({ type: 'loadModel', key, modelId: m.id, dtype: m.dtype, cdnFolder: m.cdnFolder || null, task: m.task || 'text-generation' });
     const tracked = promise.finally(() => {
       if (state.loading === key) state.loading = null;
       delete state.loadPromises[key];
