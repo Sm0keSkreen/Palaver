@@ -836,7 +836,7 @@ body{
             const thinking = !!genOpts.thinking;
             const chatMessages = thinking
               ? messages.map((m, idx) => (idx === 0 && m.role === 'system')
-                ? { role: m.role, content: '<|think|>\n' + m.content }
+                ? { role: m.role, content: '<|think|>\\n' + m.content }
                 : m)
               : messages;
             const prompt = processor.apply_chat_template(chatMessages, {
