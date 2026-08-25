@@ -361,10 +361,30 @@ body{
   padding:9px 13px;
   font-size:13.5px;
   line-height:1.55;
-  white-space:pre-wrap;
   word-break:break-word;
 }
-.msg.user .bubble{background:var(--user-bubble);}
+.msg.user .bubble{background:var(--user-bubble);white-space:pre-wrap;}
+/* Assistant bubbles hold rendered markdown (block elements handle their own
+   line breaks via <p>/<br>), so they don't want pre-wrap's literal
+   whitespace preservation the way a plain-text user bubble does. */
+.msg.assistant .bubble{white-space:normal;}
+.msg .bubble p{margin:0 0 8px;}
+.msg .bubble p:last-child{margin-bottom:0;}
+.msg .bubble ul,.msg .bubble ol{margin:0 0 8px;padding-left:20px;}
+.msg .bubble ul:last-child,.msg .bubble ol:last-child{margin-bottom:0;}
+.msg .bubble li{margin:2px 0;}
+.msg .bubble h1,.msg .bubble h2,.msg .bubble h3,.msg .bubble h4,.msg .bubble h5,.msg .bubble h6{margin:10px 0 6px;line-height:1.3;}
+.msg .bubble h1:first-child,.msg .bubble h2:first-child,.msg .bubble h3:first-child,.msg .bubble h4:first-child,.msg .bubble h5:first-child,.msg .bubble h6:first-child{margin-top:0;}
+.msg .bubble code{background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:.92em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.msg .bubble pre{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:0 0 8px;overflow-x:auto;}
+.msg .bubble pre:last-child{margin-bottom:0;}
+.msg .bubble pre code{background:none;border:none;padding:0;}
+.msg .bubble a{color:var(--accent);}
+.msg .bubble .thinking{margin:0 0 8px;padding:6px 9px;border:1px solid var(--border);border-radius:8px;background:var(--panel-2);}
+.msg .bubble .thinking summary{cursor:pointer;font-size:12px;color:var(--text-dim);user-select:none;}
+.msg .bubble .thinking[open] summary{margin-bottom:6px;}
+.msg .bubble .thinking p{font-size:12.5px;color:var(--text-dim);}
+.msg .bubble .thinking-wait{color:var(--text-dim);font-style:italic;margin:0;}
 .msg .bubble .cursor{display:inline-block;width:7px;height:1em;background:var(--text-dim);vertical-align:text-bottom;margin-left:1px;animation:blink 1s step-start infinite;}
 @keyframes blink{50%{opacity:0;}}
 .msg .model-tag{font-size:10px;color:var(--text-dim);margin-top:4px;}
@@ -442,6 +462,11 @@ body{
           <div class="row">
             <button class="btn small danger" id="deleteAllChatsBtn">Delete all chats</button>
           </div>
+          <div class="label">Thinking</div>
+          <div class="row">
+            <button class="btn small" id="thinkingModeBtn">Thinking mode: Off</button>
+          </div>
+          <div class="debug-hint">Only Gemma 4 E2B supports this — lets it reason before answering, which can help on harder questions but makes every reply slower. No effect on Gemma 270M/1B.</div>
           <div class="label">Debug</div>
           <div class="row">
             <button class="btn small" id="debugModeBtn">Debug mode: Off</button>
@@ -540,6 +565,7 @@ body{
   const themeRow = $('#themeRow');
   const deleteAllChatsBtn = $('#deleteAllChatsBtn');
   const debugModeBtn = $('#debugModeBtn');
+  const thinkingModeBtn = $('#thinkingModeBtn');
   const sidebar = $('#sidebar');
   const sidebarCollapseBtn = $('#sidebarCollapseBtn');
   const sidebarExpandBtn = $('#sidebarExpandBtn');
@@ -557,6 +583,7 @@ body{
   const SKIP_KEY_PREFIX = 'palaver-ai-skip-';
   const CHATS_KEY = 'palaver-chats-v1';
   const DEBUG_MODE_KEY = 'palaver-debug-mode';
+  const THINKING_MODE_KEY = 'palaver-thinking-mode';
 
   const state = {
     modelKey: DEFAULT_MODEL,
@@ -577,6 +604,7 @@ body{
     messages: [],           // {role:'user'|'assistant', content, modelLabel?}
     stopRequested: false,
     debugMode: false,       // when on, show real error text instead of a generic message
+    thinkingEnabled: false, // Gemma 4 E2B only — lets it reason before answering; ignored by other models
   };
 
   try {
@@ -591,6 +619,10 @@ body{
 
   try {
     state.debugMode = localStorage.getItem(DEBUG_MODE_KEY) === '1';
+  } catch { /* storage unavailable; ignore */ }
+
+  try {
+    state.thinkingEnabled = localStorage.getItem(THINKING_MODE_KEY) === '1';
   } catch { /* storage unavailable; ignore */ }
 
   /* --------------------------- Worker plumbing --------------------------- */
@@ -789,9 +821,19 @@ body{
             // same shape every other model in this app already uses) works
             // correctly, so messages are passed through unchanged.
             const { processor, model } = pipe;
-            const prompt = processor.apply_chat_template(messages, {
+            // Gemma 4's docs: thinking is triggered by putting a literal
+            // "<|think|>" token at the start of the system prompt, plus
+            // passing enable_thinking to the template — both are needed,
+            // one alone isn't enough per the model card.
+            const thinking = !!genOpts.thinking;
+            const chatMessages = thinking
+              ? messages.map((m, idx) => (idx === 0 && m.role === 'system')
+                ? { role: m.role, content: '<|think|>\n' + m.content }
+                : m)
+              : messages;
+            const prompt = processor.apply_chat_template(chatMessages, {
               add_generation_prompt: true,
-              enable_thinking: false,
+              enable_thinking: thinking,
             });
             const inputs = await processor(prompt, null, null, { add_special_tokens: false });
             const streamer = new transformersMod.TextStreamer(processor.tokenizer, {
@@ -802,11 +844,15 @@ body{
               },
             });
             // Google's documented sampling defaults for Gemma 4, not this
-            // app's usual temperature/top_p — do_sample/max_new_tokens still
-            // come from genOpts so Stop/length behave the same as other models.
+            // app's usual temperature/top_p — do_sample still comes from
+            // genOpts so Stop behaves the same as other models. max_new_tokens
+            // gets a bigger floor when thinking is on: the reasoning trace
+            // itself consumes part of that budget, and without headroom a
+            // long thought could eat the whole thing and leave no tokens
+            // left for the actual answer.
             const outputs = await model.generate({
               ...inputs,
-              max_new_tokens: genOpts.max_new_tokens,
+              max_new_tokens: thinking ? Math.max(genOpts.max_new_tokens, 1536) : genOpts.max_new_tokens,
               do_sample: genOpts.do_sample,
               temperature: 1.0,
               top_p: 0.95,
@@ -980,6 +1026,35 @@ body{
     return out;
   }
 
+  // Characters, not tokens — an exact count would need a real tokenizer call
+  // (done inside the worker, off this thread), and the same ~4 chars/token
+  // heuristic already used by estimateOutputTokens() above is close enough
+  // for a soft budget. Without a cap, a long-running chat would eventually
+  // just exceed a model's context window outright; well before that, more
+  // history means a bigger KV cache and slower generation on every turn —
+  // a real cost on a memory-constrained device. ~12000 chars (~3000 tokens)
+  // is enough for a handful of back-and-forth turns while keeping that cost
+  // small; tune this constant if that trade-off should shift either way.
+  const MAX_CONTEXT_CHARS = 12000;
+
+  // The full conversation stays in state.messages (and gets shown/saved as
+  // normal) — this only trims what actually gets sent to the model each
+  // turn, oldest messages first, and always keeps at least the most recent
+  // message so a very long single message still gets sent rather than
+  // dropped entirely.
+  function buildContextMessages(messages) {
+    let used = 0;
+    const kept = [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      const len = (m.content || '').length;
+      if (kept.length && used + len > MAX_CONTEXT_CHARS) break;
+      kept.unshift(m);
+      used += len;
+    }
+    return kept;
+  }
+
   function runGenerate(key, messages, genOpts, onChunk) {
     return new Promise((resolve, reject) => {
       const reqId = ++workerReqSeq;
@@ -1133,6 +1208,146 @@ body{
     msgCount.textContent = n ? `${n} message${n === 1 ? '' : 's'}` : '';
   }
 
+  // Assistant replies commonly come back with markdown syntax (**bold**,
+  // `code`, lists, links, headers) — this renders that deliberately small
+  // subset rather than implementing full CommonMark, so this stays a
+  // hand-rolled ~40-line function instead of pulling in an external library
+  // (Palaver is otherwise fully self-contained apart from transformers.js
+  // itself). Raw HTML is escaped BEFORE any markdown syntax is applied, so
+  // text a model generates can never inject markup — only the tags this
+  // code itself constructs ever reach innerHTML. User messages are shown as
+  // plain text elsewhere; this is only ever used for assistant replies.
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function renderInline(s) {
+    const codeSpans = [];
+    let out = escapeHtml(s);
+    // Inline code first, protected behind placeholders unlikely to collide
+    // with real text, so its contents can't be re-interpreted by the
+    // bold/italic/link rules below.
+    out = out.replace(/`([^`]+)`/g, (_, code) => {
+      codeSpans.push(code);
+      return '@@PALAVER_CODE_' + (codeSpans.length - 1) + '@@';
+    });
+    // Scheme-restricted so a model can't produce a javascript: URL that
+    // runs on click; quotes excluded so a URL can't break out of the href
+    // attribute it gets inserted into below.
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)"']+|mailto:[^\s)"']+)\)/g,
+      (_, text, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`);
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    out = out.replace(/(^|[^\w])_([^_]+)_(?!\w)/g, '$1<em>$2</em>');
+    out = out.replace(/@@PALAVER_CODE_(\d+)@@/g, (_, idx) => `<code>${codeSpans[idx]}</code>`);
+    return out;
+  }
+  function renderMarkdown(src) {
+    const lines = (src || '').replace(/\r\n/g, '\n').split('\n');
+    const html = [];
+    let paragraph = [];
+    let listType = null; // 'ul' | 'ol' | null
+    let listItems = [];
+    const flushParagraph = () => {
+      if (paragraph.length) {
+        html.push('<p>' + paragraph.map(renderInline).join('<br>') + '</p>');
+        paragraph = [];
+      }
+    };
+    const flushList = () => {
+      if (listType) {
+        html.push(`<${listType}>` + listItems.map((it) => '<li>' + renderInline(it) + '</li>').join('') + `</${listType}>`);
+        listType = null;
+        listItems = [];
+      }
+    };
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const fence = line.match(/^```(.*)$/);
+      if (fence) {
+        flushParagraph(); flushList();
+        const codeLines = [];
+        i++;
+        while (i < lines.length && !/^```\s*$/.test(lines[i])) { codeLines.push(lines[i]); i++; }
+        i++; // skip closing fence (or run off the end if unclosed — still renders what streamed in)
+        html.push('<pre><code>' + escapeHtml(codeLines.join('\n')) + '</code></pre>');
+        continue;
+      }
+      const header = line.match(/^(#{1,6})\s+(.*)$/);
+      if (header) {
+        flushParagraph(); flushList();
+        const level = header[1].length;
+        html.push(`<h${level}>` + renderInline(header[2]) + `</h${level}>`);
+        i++;
+        continue;
+      }
+      const ul = line.match(/^[-*]\s+(.*)$/);
+      if (ul) {
+        flushParagraph();
+        if (listType && listType !== 'ul') flushList();
+        listType = 'ul';
+        listItems.push(ul[1]);
+        i++;
+        continue;
+      }
+      const ol = line.match(/^\d+\.\s+(.*)$/);
+      if (ol) {
+        flushParagraph();
+        if (listType && listType !== 'ol') flushList();
+        listType = 'ol';
+        listItems.push(ol[1]);
+        i++;
+        continue;
+      }
+      if (/^\s*$/.test(line)) {
+        flushParagraph(); flushList();
+        i++;
+        continue;
+      }
+      flushList();
+      paragraph.push(line);
+      i++;
+    }
+    flushParagraph();
+    flushList();
+    return html.join('\n');
+  }
+
+  // With Thinking mode on, Gemma 4 wraps its reasoning as
+  // "<|channel>thought\n...<channel|>" before the actual answer (see the
+  // WORKER_SRC generate handler, which prepends the <|think|> trigger token
+  // when genOpts.thinking is set). No other model in this app ever produces
+  // this marker, so this is a harmless no-op — {thought: '', answer: raw}
+  // — for every reply that isn't Gemma 4 with thinking on.
+  function splitThinking(raw) {
+    const openTag = '<|channel>thought';
+    const closeTag = '<channel|>';
+    const openIdx = raw.indexOf(openTag);
+    if (openIdx === -1) return { thought: '', answer: raw, stillThinking: false };
+    let afterOpen = raw.slice(openIdx + openTag.length);
+    if (afterOpen.startsWith('\n')) afterOpen = afterOpen.slice(1);
+    const closeIdx = afterOpen.indexOf(closeTag);
+    if (closeIdx === -1) return { thought: afterOpen, answer: '', stillThinking: true };
+    return { thought: afterOpen.slice(0, closeIdx), answer: afterOpen.slice(closeIdx + closeTag.length), stillThinking: false };
+  }
+
+  function setBubbleContent(bubble, role, text) {
+    if (role !== 'assistant') {
+      bubble.textContent = text;
+      return;
+    }
+    const { thought, answer, stillThinking } = splitThinking(text);
+    let html = '';
+    if (thought) {
+      html += '<details class="thinking"' + (stillThinking ? ' open' : '') + '><summary>'
+        + (stillThinking ? 'Thinking…' : 'Thinking') + '</summary>' + renderMarkdown(thought) + '</details>';
+    }
+    html += (stillThinking && !answer) ? '<p class="thinking-wait">Thinking…</p>' : renderMarkdown(answer);
+    bubble.innerHTML = html;
+  }
+
   function addMessageBubble(role, initialText, modelLabel) {
     chatEmpty.style.display = 'none';
     const wrap = document.createElement('div');
@@ -1143,7 +1358,7 @@ body{
     const col = document.createElement('div');
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.textContent = initialText || '';
+    setBubbleContent(bubble, role, initialText || '');
     col.appendChild(bubble);
     if (role === 'assistant') {
       const tag = document.createElement('div');
@@ -1377,6 +1592,16 @@ body{
     updateSendBtn();
   });
 
+  function updateThinkingModeBtn() {
+    thinkingModeBtn.textContent = 'Thinking mode: ' + (state.thinkingEnabled ? 'On' : 'Off');
+    thinkingModeBtn.classList.toggle('primary', state.thinkingEnabled);
+  }
+  thinkingModeBtn.addEventListener('click', () => {
+    state.thinkingEnabled = !state.thinkingEnabled;
+    try { localStorage.setItem(THINKING_MODE_KEY, state.thinkingEnabled ? '1' : '0'); } catch { /* ignore */ }
+    updateThinkingModeBtn();
+  });
+
   sidebarCollapseBtn.addEventListener('click', () => {
     document.getElementById('app').classList.add('sidebar-collapsed');
   });
@@ -1434,8 +1659,14 @@ body{
     // streamed in yet) is saved here as the assistant turn.
     pendingGen.clear();
     if (currentGenWrap && currentGenWrap._bubble) {
-      const partial = currentGenWrap._bubble.textContent || '';
-      currentGenWrap._bubble.textContent = partial + ' [stopped]';
+      // Read the raw markdown source tracked alongside the rendered HTML
+      // (currentGenWrap._rawText), not the bubble's rendered .textContent —
+      // once replies are markdown-rendered, .textContent would return tags
+      // stripped of their markdown syntax (e.g. "**hi**" already rendered
+      // to <strong>hi</strong> reads back as just "hi"), corrupting both
+      // what gets displayed here and what gets saved to history below.
+      const partial = currentGenWrap._rawText || '';
+      setBubbleContent(currentGenWrap._bubble, 'assistant', partial + ' [stopped]');
       const m = MODELS[state.modelKey];
       state.messages.push({
         role: 'assistant',
@@ -1483,8 +1714,25 @@ body{
     }
 
     const modelKeyAtStart = state.modelKey;
-    const wireMessages = alternateMessages([{ role: 'system', content: SYSTEM_PROMPT }, ...state.messages.map((m) => ({ role: m.role, content: m.content }))]);
-    const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true };
+    // Gemma 4's own docs are explicit that a previous turn's thinking trace
+    // must not be replayed back as history ("Thoughts from previous model
+    // turns must not be added before the next user turn begins") — a stored
+    // assistant message keeps the full raw text (with the thinking block)
+    // so it still displays/collapses correctly when revisited, but only the
+    // answer portion goes out over the wire. splitThinking() is a no-op for
+    // any message that never had a thinking block, so this is safe for
+    // every other model too.
+    const wireMessages = alternateMessages([
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...buildContextMessages(state.messages).map((m) => ({
+        role: m.role,
+        content: m.role === 'assistant' ? (splitThinking(m.content).answer || m.content) : m.content,
+      })),
+    ]);
+    // thinking is only ever read by the worker's Gemma-4-specific branch —
+    // every other model ignores it, so it's safe to include unconditionally
+    // here rather than needing to know which model is selected.
+    const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true, thinking: state.thinkingEnabled };
 
     state.generating = true;
     state.stopRequested = false;
@@ -1504,7 +1752,8 @@ body{
       const text = await runGenerate(modelKeyAtStart, wireMessages, genOpts, (chunk) => {
         acc += chunk;
         state.genTokens += 1;
-        wrap._bubble.textContent = acc;
+        wrap._rawText = acc;
+        setBubbleContent(wrap._bubble, 'assistant', acc);
         wrap._bubble.appendChild(cursor);
         scrollToBottom();
         updateSendBtn();
@@ -1512,7 +1761,7 @@ body{
       if (!state.stopRequested) {
         const finalText = (text || acc || '').trim();
         cursor.remove();
-        wrap._bubble.textContent = finalText || '(no response)';
+        setBubbleContent(wrap._bubble, 'assistant', finalText || '(no response)');
         state.messages.push({ role: 'assistant', content: finalText, modelLabel: MODELS[modelKeyAtStart].label });
         renderMsgCount();
         persistCurrentChat();
@@ -1522,7 +1771,7 @@ body{
         cursor.remove();
         console.error(err);
         const detail = (state.debugMode && err && err.message) ? ` (${err.message})` : '';
-        wrap._bubble.textContent = acc ? acc + '\n\n[generation failed' + detail + ']' : 'Something went wrong generating a reply.' + detail;
+        setBubbleContent(wrap._bubble, 'assistant', acc ? acc + '\n\n[generation failed' + detail + ']' : 'Something went wrong generating a reply.' + detail);
         // Same reason as stopGenerating(): the user's turn was already
         // pushed to state.messages before generation started, and every
         // model here requires strictly alternating user/assistant turns in
@@ -1550,6 +1799,7 @@ body{
   renderModelOptions();
   renderThemes();
   updateDebugModeBtn();
+  updateThinkingModeBtn();
   updateSendBtn();
   autoGrow();
   // Start fetching the default model in the background immediately, so Send
