@@ -4,13 +4,13 @@ An offline AI chat app. Every model runs entirely on-device in your browser
 via [transformers.js](https://huggingface.co/docs/transformers.js) — nothing
 you type is ever sent anywhere.
 
-Pick from three small local models and just start typing:
+Pick from three Gemma models and just start typing:
 
 | Model | Size | Notes |
 |---|---|---|
-| Fast | ~400MB | Qwen2.5-0.5B-Instruct — quickest replies |
-| Balanced | ~800MB | Llama-3.2-1B-Instruct — good middle ground |
-| Better | ~1.1GB | SmolLM2-1.7B-Instruct — highest quality |
+| Gemma 270M | ~320MB | Google, ultra-light, quickest replies |
+| Gemma 1B | ~860MB | Google, newer arch, good middle ground |
+| Gemma 4 E2B | ~3.4GB | Google, newest architecture, multimodal |
 
 Model weights download once (browser-cached after that) and generation runs
 in a Web Worker so the page never freezes.
