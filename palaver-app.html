@@ -516,14 +516,12 @@ body{
   const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail.';
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
-  // How long a loaded model sits idle (no generation, no new load) before its
-  // worker is discarded to free WASM/GPU memory. 0 means "unload as soon as
-  // it's not being used" — the check still runs via setTimeout so it fires
-  // right after the current call stack clears (letting the UI update first),
-  // not literally mid-function. The browser cache keeps the weights, so the
-  // next message just reloads into a fresh worker quickly — it's not a
-  // re-download, same as the existing stop/fail recovery paths.
-  const IDLE_UNLOAD_MS = 0;
+  // A loaded model stays resident across messages — no idle-unload timer.
+  // The only thing that discards a worker is ensureModel() loading a
+  // *different* model than whatever's currently resident (see "Keep at most
+  // one model resident at a time" below), so switching models is still the
+  // one thing that frees the previous model's memory; sending more messages
+  // to the same model never re-triggers a reload.
 
   const THEMES = [
     { id: 'midnight', label: 'Midnight', bg: '#080b11', accent: '#3e82f7' },
@@ -571,7 +569,7 @@ body{
     loadingPct: null,
     loadStartedAt: null,
     loadError: null,
-    lastErrorMessage: null, // raw error text from the worker, for debug mode
+    loadErrorMessages: {}, // modelKey -> raw error text from the worker, for the last load attempt
     generating: false,
     genTokens: 0,
     genMaxTokens: 0,
@@ -844,32 +842,7 @@ body{
   let workerReqSeq = 0;
   const pendingGen = new Map(); // reqId -> { resolve, reject, onChunk }
 
-  let idleUnloadTimer = null;
-  function cancelIdleUnloadTimer() {
-    if (idleUnloadTimer) { clearTimeout(idleUnloadTimer); idleUnloadTimer = null; }
-  }
-  function resetIdleUnloadTimer() {
-    cancelIdleUnloadTimer();
-    idleUnloadTimer = setTimeout(unloadIdleModel, IDLE_UNLOAD_MS);
-  }
-  function unloadIdleModel() {
-    idleUnloadTimer = null;
-    // Never discard a worker that's mid-load or mid-generation — just push
-    // the check out and try again once whatever's running settles.
-    if (state.generating || state.loading) { resetIdleUnloadTimer(); return; }
-    const resident = Object.keys(state.pipelinesReady).find((k) => state.pipelinesReady[k]);
-    if (!resident) return; // nothing loaded, nothing to free
-    worker.terminate();
-    worker = makeWorker();
-    state.pipelinesReady = {};
-    renderModelOptions();
-    updateSendBtn();
-  }
-
   function makeWorker() {
-    // Every replacement worker starts with a clean slate, so any pending
-    // idle-unload check from the worker being replaced is stale.
-    cancelIdleUnloadTimer();
     const blob = new Blob([WORKER_SRC], { type: 'text/javascript' });
     const url = URL.createObjectURL(blob);
     const w = new Worker(url, { type: 'module' });
@@ -877,7 +850,12 @@ body{
     w.onmessage = onWorkerMessage;
     w.onerror = (err) => {
       console.error('AI worker error:', err);
-      state.lastErrorMessage = (err && (err.message || String(err))) || 'Unknown worker error';
+      const message = (err && (err.message || String(err))) || 'Unknown worker error';
+      // This top-level handler fires for errors that never made it through
+      // the normal postMessage-based load/generate error paths (a crash in
+      // the worker script itself, for example), so there's no `key` on the
+      // event — attribute it to whichever model was actively loading, if any.
+      if (state.loading) state.loadErrorMessages[state.loading] = message;
     };
     return w;
   }
@@ -889,7 +867,6 @@ body{
       if (state.loading === msg.key) { state.loadingPct = msg.pct; updateSendBtn(); }
     } else if (msg.type === 'loadDone') {
       state.pipelinesReady[msg.key] = true;
-      resetIdleUnloadTimer();
       settleLoad(msg.key, null);
     } else if (msg.type === 'loadError') {
       settleLoad(msg.key, msg.message);
@@ -910,7 +887,7 @@ body{
     const resolver = loadResolvers[key];
     delete loadResolvers[key];
     if (errMessage) {
-      state.lastErrorMessage = errMessage;
+      state.loadErrorMessages[key] = errMessage;
       // A model can fail outright on a device whose real memory is smaller
       // than the model needs. A failed WASM allocation leaves
       // onnxruntime-web's memory maxed out (WebAssembly.Memory can grow but
@@ -1022,6 +999,11 @@ body{
         + (state.modelKey === key ? ' selected' : '')
         + (unavailable ? ' unavailable' : '');
       div.innerHTML = `<span class="name">${m.label}</span><span class="meta">${unavailable ? 'Unavailable on this device' : m.meta}</span>`;
+      // Set via property (not baked into the innerHTML string above) so an
+      // error message containing quotes or HTML-special characters can't
+      // break the markup — the title shows the real reason on hover instead
+      // of making you dig through Debug mode to find out why.
+      if (unavailable && state.loadErrorMessages[key]) div.title = state.loadErrorMessages[key];
       div.addEventListener('click', () => selectModel(key));
       modelList.appendChild(div);
     });
@@ -1030,7 +1012,8 @@ body{
 
   function selectModel(key) {
     if (state.unavailable[key]) {
-      flashSendBtn("That model isn't supported on this device.");
+      const reason = state.loadErrorMessages[key];
+      flashSendBtn(reason ? `Not supported on this device: ${reason}` : "That model isn't supported on this device.", 3200);
       return;
     }
     state.modelKey = key;
@@ -1127,9 +1110,8 @@ body{
       sendBtn.disabled = false;
       setProgressFill(0);
       aiProgressLabel.textContent = 'Retry';
-      engineStatus.textContent = (state.debugMode && state.lastErrorMessage)
-        ? `Model failed to load: ${state.lastErrorMessage}`
-        : 'Model failed to load';
+      const reason = state.loadErrorMessages[state.modelKey];
+      engineStatus.textContent = reason ? `Model failed to load: ${reason}` : 'Model failed to load';
     } else {
       sendBtn.disabled = false;
       setProgressFill(0);
@@ -1487,7 +1469,7 @@ body{
       await ensureModel(state.modelKey);
     } catch (err) {
       const base = "Sorry — I couldn't load the AI model on this device.";
-      const msg = (state.debugMode && err && err.message) ? `${base}\n\nDebug: ${err.message}` : base;
+      const msg = (err && err.message) ? `${base}\n\n${err.message}` : base;
       addMessageBubble('assistant', msg, MODELS[state.modelKey].label);
       // The user turn above was already pushed to state.messages before this
       // load attempt — every model here requires strictly alternating
@@ -1558,10 +1540,6 @@ body{
     } finally {
       currentGenWrap = null;
       state.generating = false;
-      // Generation just used the model; the idle clock starts fresh from here
-      // (the model may already have been unloaded by stopGenerating's own
-      // worker swap, in which case there's nothing to arm a timer for).
-      if (state.pipelinesReady[modelKeyAtStart]) resetIdleUnloadTimer();
       updateSendBtn();
     }
   }
