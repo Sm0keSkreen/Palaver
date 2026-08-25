@@ -581,6 +581,7 @@ body{
   const msgCount = $('#msgCount');
 
   const SKIP_KEY_PREFIX = 'palaver-ai-skip-';
+  const SKIP_REASON_KEY_PREFIX = 'palaver-ai-skip-reason-';
   const CHATS_KEY = 'palaver-chats-v1';
   const DEBUG_MODE_KEY = 'palaver-debug-mode';
   const THINKING_MODE_KEY = 'palaver-thinking-mode';
@@ -609,7 +610,14 @@ body{
 
   try {
     Object.keys(MODELS).forEach((k) => {
-      if (sessionStorage.getItem(SKIP_KEY_PREFIX + k) === '1') state.unavailable[k] = true;
+      if (sessionStorage.getItem(SKIP_KEY_PREFIX + k) === '1') {
+        state.unavailable[k] = true;
+        // The skip flag alone survives a reload; the reason text needs its
+        // own persisted copy too, or a re-opened tab shows the generic
+        // "isn't supported" message instead of the real cause.
+        const savedReason = sessionStorage.getItem(SKIP_REASON_KEY_PREFIX + k);
+        if (savedReason) state.loadErrorMessages[k] = savedReason;
+      }
     });
     if (state.unavailable[state.modelKey]) {
       const firstOk = Object.keys(MODELS).find((k) => !state.unavailable[k]);
@@ -941,7 +949,10 @@ body{
       // fail identically. Ditch the poisoned worker for a fresh one.
       console.warn(`Model "${key}" failed to load; marking unavailable:`, errMessage);
       state.unavailable[key] = true;
-      try { sessionStorage.setItem(SKIP_KEY_PREFIX + key, '1'); } catch { /* ignore */ }
+      try {
+        sessionStorage.setItem(SKIP_KEY_PREFIX + key, '1');
+        sessionStorage.setItem(SKIP_REASON_KEY_PREFIX + key, errMessage);
+      } catch { /* ignore */ }
       worker.terminate();
       worker = makeWorker();
       state.pipelinesReady = {};
