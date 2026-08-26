@@ -829,7 +829,7 @@ body{
         jspiOrt = await import(${JSON.stringify(JSPI_ORT_CDN)});
         // Point WASM files at the JSPI builds before transformers.js gets
         // a chance to set them to the asyncify builds (the env check
-        // `!wasmPaths` skips the overwrite if already set).
+        // skips the overwrite if wasmPaths is already set).
         const jspiWasmBase = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/';
         jspiOrt.env.wasm.wasmPaths = {
           mjs:  jspiWasmBase + 'ort-wasm-simd-threaded.jspi.mjs',
