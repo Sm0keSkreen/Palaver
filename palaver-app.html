@@ -767,7 +767,251 @@ body{
       return { handled: 'date', raw: text };
     }
 
+    // Text analysis: "count words", "how many words", "word count"
+    if (/\b(count|how\s+many)\s+(words?|chars?|characters?|sentences?|letters?|lines?)\b/i.test(text) ||
+        /\b(word|char|character|sentence|letter|line)\s+count\b/i.test(text)) {
+      return { handled: 'count', raw: text };
+    }
+
+    // Case conversion
+    if (/\b(uppercase|UPPERCASE|upper\s*case|to\s+upper)\b/i.test(text)) return { handled: 'case', raw: text, mode: 'upper' };
+    if (/\b(lowercase|lower\s*case|to\s+lower)\b/i.test(text)) return { handled: 'case', raw: text, mode: 'lower' };
+    if (/\b(title\s*case|title\s*case)\b/i.test(text)) return { handled: 'case', raw: text, mode: 'title' };
+    if (/\b(reverse|backwards)\b/i.test(text) && text.length < 200) return { handled: 'case', raw: text, mode: 'reverse' };
+
+    // JSON formatting
+    if (/\b(format|pretty|validate|check)\s+json\b/i.test(text) || /\bjson\s+(format|pretty|validate|check)\b/i.test(text)) {
+      return { handled: 'json', raw: text };
+    }
+
+    // Base64
+    if (/\bbase\s*64\s+(encode|decode)\b/i.test(text) || /\b(encode|decode)\s+base\s*64\b/i.test(text)) {
+      return { handled: 'base64', raw: text };
+    }
+
+    // URL parsing
+    if (/\b(parse|extract|break\s+down)\s+(the\s+)?url\b/i.test(text || /\burl\s+(parse|extract)\b/i.test(text))) {
+      return { handled: 'url', raw: text };
+    }
+    if (/^https?:\/\//.test(text.trim()) && text.trim().length < 500 && !text.includes(' ')) {
+      return { handled: 'url', raw: text };
+    }
+
+    // UUID
+    if (/\b(generate|create|make)\s+(a\s+)?(uuid|guid)\b/i.test(text) || /\b(uuid|guid)\s+(generate|create|make)\b/i.test(text)) {
+      return { handled: 'uuid', raw: text };
+    }
+
+    // Hash
+    if (/\b(hash|sha-?256|sha-?512|md5)\s+(this|the\s+text|below)\b/i.test(text) ||
+        /\b(hash|sha-?256|sha-?512|md5)\s+(encode|of|for)\b/i.test(text)) {
+      return { handled: 'hash', raw: text };
+    }
+
+    // Color conversion
+    if (/\b(convert|what\s+is|what's)\s+(the\s+)?(color|colour)\b/i.test(text) ||
+        /^#?[0-9a-f]{3,6}$/i.test(text.trim())) {
+      return { handled: 'color', raw: text };
+    }
+
+    // Timestamp
+    if (/\b(unix\s+timestamp|epoch|convert\s+(the\s+)?timestamp|what\s+time|what\s+date)\b/i.test(text) ||
+        /\b(timestamp|epoch)\s+(to|convert)\b/i.test(text)) {
+      return { handled: 'timestamp', raw: text };
+    }
+
+    // Base conversion
+    if (/\b(convert|what\s+is|what's)\s+\d+\s+(to|in|as)\s+(binary|hex|octal|decimal)\b/i.test(text)) {
+      return { handled: 'base', raw: text };
+    }
+
+    // CSV to JSON
+    if (/\b(csv\s+to\s+json|convert\s+csv|parse\s+csv)\b/i.test(text)) {
+      return { handled: 'csv', raw: text };
+    }
+
+    // Diff
+    if (/\b(diff|compare|difference\s+between)\b/i.test(text) && text.includes('\n')) {
+      return { handled: 'diff', raw: text };
+    }
+
+    // Password
+    if (/\b(generate|create|make)\s+(a\s+)?password\b/i.test(text)) {
+      return { handled: 'password', raw: text };
+    }
+
     return { handled: false };
+  }
+
+  /* ---- Deterministic text tools (no model needed) ---- */
+
+  function countText(text) {
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const chars = text.length;
+    const charsNoSpace = text.replace(/\s/g, '').length;
+    const sentences = text.split(/[.!?]+/).filter((s) => s.trim()).length;
+    const paragraphs = text.split(/\n\s*\n/).filter((s) => s.trim()).length;
+    const readingMin = Math.max(1, Math.ceil(words / 200));
+    return { words, chars, charsNoSpace, sentences, paragraphs, readingMin };
+  }
+
+  function convertCase(text, mode) {
+    switch (mode) {
+      case 'upper': return text.toUpperCase();
+      case 'lower': return text.toLowerCase();
+      case 'title': return text.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+      case 'sentence': return text.replace(/(^\s*|[.!?]\s+)(\w)/g, (_, sep, c) => sep + c.toUpperCase());
+      case 'reverse': return text.split('').reverse().join('');
+      case 'slug': return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      case 'trim': return text.replace(/^\s+|\s+$/g, '').replace(/\n{3,}/g, '\n\n');
+      default: return text;
+    }
+  }
+
+  function formatJson(text) {
+    try {
+      const parsed = JSON.parse(text);
+      return { formatted: JSON.stringify(parsed, null, 2), valid: true };
+    } catch (err) {
+      return { error: err.message, valid: false };
+    }
+  }
+
+  function base64Encode(text) { return btoa(unescape(encodeURIComponent(text))); }
+  function base64Decode(text) { return decodeURIComponent(escape(atob(text))); }
+
+  function parseUrl(text) {
+    try {
+      const u = new URL(text);
+      const params = {};
+      u.searchParams.forEach((v, k) => { params[k] = v; });
+      return { protocol: u.protocol, hostname: u.hostname, port: u.port, pathname: u.pathname, search: u.search, hash: u.hash, params, origin: u.origin };
+    } catch { return { error: 'Invalid URL' }; }
+  }
+
+  function testRegex(pattern, flags, text) {
+    try {
+      const re = new RegExp(pattern, flags);
+      const matches = [];
+      let m;
+      if (flags.includes('g')) {
+        while ((m = re.exec(text)) !== null) {
+          matches.push({ match: m[0], index: m.index, groups: m.slice(1) });
+          if (m.index === re.lastIndex) re.lastIndex++;
+        }
+      } else {
+        m = re.exec(text);
+        if (m) matches.push({ match: m[0], index: m.index, groups: m.slice(1) });
+      }
+      return { matches, count: matches.length };
+    } catch (err) { return { error: err.message }; }
+  }
+
+  function generateUuid() {
+    return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, (c) =>
+      (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+    );
+  }
+
+  async function hashText(text, algo) {
+    const enc = new TextEncoder().encode(text);
+    const algos = { 'md5': 'SHA-1', 'sha1': 'SHA-1', 'sha256': 'SHA-256', 'sha512': 'SHA-512' };
+    const useAlgo = algos[algo] || 'SHA-256';
+    const hash = await crypto.subtle.digest(useAlgo, enc);
+    return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function convertColor(hex) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+    if (!/^[0-9a-f]{6}$/i.test(hex)) return { error: 'Invalid hex color' };
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    const hsl = (() => {
+      const rn = r / 255, gn = g / 255, bn = b / 255;
+      const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+      const l = (max + min) / 2;
+      let h = 0, s = 0;
+      if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+        else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+        else h = ((rn - gn) / d + 4) / 6;
+      }
+      return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+    })();
+    return { hex: '#' + hex, rgb: `rgb(${r}, ${g}, ${b})`, hsl: `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)` };
+  }
+
+  function convertTimestamp(input) {
+    const trimmed = input.replace(/^(convert|what\s+is|what's|show)\s+/i, '').replace(/\?+$/g, '').trim();
+    let ms = 0;
+    if (/^\d{10}$/.test(trimmed)) ms = Number(trimmed) * 1000;
+    else if (/^\d{13}$/.test(trimmed)) ms = Number(trimmed);
+    else { const d = new Date(trimmed); if (isNaN(d.getTime())) return { error: 'Invalid timestamp' }; ms = d.getTime(); }
+    const d = new Date(ms);
+    return {
+      unix_s: Math.floor(ms / 1000),
+      unix_ms: ms,
+      iso: d.toISOString(),
+      local: d.toLocaleString(),
+      utc: d.toUTCString(),
+      relative: dayjs ? dayjs(d).fromNow() : null,
+    };
+  }
+
+  function convertBase(input) {
+    const m = input.replace(/^(convert|what\s+is|what's)\s+/i, '').replace(/\?+$/g, '').trim()
+      .match(/^(\d+)\s*(?:to|in|as)\s*(bin(?:ary)?|hex(?:adecimal)?|oct(?:al)?|dec(?:imal)?)$/i);
+    if (!m) {
+      const n = parseInt(input.replace(/[^0-9a-fA-Fx]/g, ''), 0);
+      if (isNaN(n)) return { error: 'Could not parse number' };
+      return { decimal: n, binary: n.toString(2), octal: n.toString(8), hexadecimal: '0x' + n.toString(16).toUpperCase() };
+    }
+    const n = parseInt(m[1], 10);
+    if (isNaN(n)) return { error: 'Invalid number' };
+    return { decimal: n, binary: n.toString(2), octal: n.toString(8), hexadecimal: '0x' + n.toString(16).toUpperCase() };
+  }
+
+  function csvToJson(csv) {
+    try {
+      const lines = csv.trim().split('\n');
+      if (lines.length < 2) return { error: 'Need at least a header and one data row' };
+      const headers = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+      const rows = lines.slice(1).map((line) => {
+        const vals = line.split(',').map((v) => v.trim().replace(/^"|"$/g, ''));
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+        return obj;
+      });
+      return { json: JSON.stringify(rows, null, 2), count: rows.length };
+    } catch (err) { return { error: err.message }; }
+  }
+
+  function diffText(a, b) {
+    const aLines = a.split('\n'), bLines = b.split('\n');
+    const result = [];
+    const max = Math.max(aLines.length, bLines.length);
+    for (let i = 0; i < max; i++) {
+      const al = aLines[i], bl = bLines[i];
+      if (al === undefined) result.push('+ ' + bl);
+      else if (bl === undefined) result.push('- ' + al);
+      else if (al !== bl) { result.push('- ' + al); result.push('+ ' + bl); }
+    }
+    return { diff: result.join('\n'), additions: result.filter((l) => l.startsWith('+')).length, removals: result.filter((l) => l.startsWith('-')).length };
+  }
+
+  function generatePassword(length = 16, opts = {}) {
+    const lower = 'abcdefghijklmnopqrstuvwxyz', upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', nums = '0123456789', syms = '!@#$%^&*';
+    let chars = lower + upper + nums;
+    if (opts.symbols !== false) chars += syms;
+    let pw = '';
+    const arr = new Uint32Array(length);
+    crypto.getRandomValues(arr);
+    for (let i = 0; i < length; i++) pw += chars[arr[i] % chars.length];
+    return pw;
   }
 
   /* --------------------------- Worker plumbing --------------------------- */
@@ -1975,26 +2219,94 @@ body{
     persistCurrentChat();
 
     // ---- Heuristic pre-routing for local tools ----
-    // If the message is clearly a math or date question, answer it
-    // deterministically without burning model tokens.  The 1B model
-    // hallucinates arithmetic ~30% of the time; this avoids that entirely.
+    // Deterministic tools that offload work the 1B model would hallucinate.
     const route = heuristicRoute(text);
     if (route.handled) {
       let toolResult = '';
       let toolLabel = '';
-      if (route.handled === 'math') {
-        const r = await evalMath(route.raw);
-        toolResult = r.error
-          ? `I couldn't evaluate that math expression: ${r.error}`
-          : `**${r.formatted}**`;
-        toolLabel = ' (calculated)';
-      } else if (route.handled === 'date') {
-        const r = await parseDate(route.raw);
-        toolResult = r.error
-          ? `I couldn't parse that date: ${r.error}`
-          : `**${r.formatted}** (${r.relative})`;
-        toolLabel = ' (date parsed)';
-      }
+      try {
+        if (route.handled === 'math') {
+          const r = await evalMath(route.raw);
+          toolResult = r.error ? `I couldn't evaluate that: ${r.error}` : `**${r.formatted}**`;
+          toolLabel = ' (calculated)';
+        } else if (route.handled === 'date') {
+          const r = await parseDate(route.raw);
+          toolResult = r.error ? `I couldn't parse that date: ${r.error}` : `**${r.formatted}** (${r.relative})`;
+          toolLabel = ' (date parsed)';
+        } else if (route.handled === 'count') {
+          const textToCount = route.raw.replace(/\b(count|how\s+many|words?|chars?|characters?|sentences?|letters?|lines?|of|in|the|text|below)\b/gi, '').trim();
+          const sample = textToCount || state.messages.filter((m) => m.role === 'user').pop()?.content || '';
+          const c = countText(sample);
+          toolResult = `**${c.words}** words, **${c.chars}** characters (${c.charsNoSpace} without spaces), **${c.sentences}** sentences, **${c.paragraphs}** paragraphs. ~${c.readingMin} min read.`;
+          toolLabel = ' (counted)';
+        } else if (route.handled === 'case') {
+          const src = route.raw.replace(/\b(uppercase|lowercase|upper\s*case|lower\s*case|title\s*case|reverse|backwards|to\s+upper|to\s+lower|convert|make|the\s+text|below|this)\b/gi, '').trim();
+          const sample = src || state.messages.filter((m) => m.role === 'user').pop()?.content || '';
+          toolResult = '```\n' + convertCase(sample, route.mode) + '\n```';
+          toolLabel = ' (converted)';
+        } else if (route.handled === 'json') {
+          const src = route.raw.replace(/\b(format|pretty|validate|check|json|the\s+text|below|this)\b/gi, '').trim();
+          const r = formatJson(src);
+          toolResult = r.valid ? '**Valid JSON:**\n```json\n' + r.formatted + '\n```' : '**Invalid JSON:** ' + r.error;
+          toolLabel = ' (json)';
+        } else if (route.handled === 'base64') {
+          const isDecode = /\bdecode\b/i.test(route.raw);
+          const src = route.raw.replace(/\b(base\s*64|encode|decode|the\s+text|below|this)\b/gi, '').trim();
+          try {
+            toolResult = isDecode ? '**Decoded:** ' + base64Decode(src) : '**Encoded:** `' + base64Encode(src) + '`';
+          } catch (e) { toolResult = '**Error:** ' + e.message; }
+          toolLabel = ' (base64)';
+        } else if (route.handled === 'url') {
+          const src = route.raw.replace(/\b(parse|extract|break\s+down|the\s+url|below|this)\b/gi, '').trim();
+          const r = parseUrl(src);
+          toolResult = r.error ? '**Error:** ' + r.error :
+            `**Protocol:** ${r.protocol}\n**Host:** ${r.hostname}${r.port ? ':' + r.port : ''}\n**Path:** ${r.pathname}\n**Params:** ${Object.keys(r.params).length ? JSON.stringify(r.params) : 'none'}`;
+          toolLabel = ' (url parsed)';
+        } else if (route.handled === 'uuid') {
+          const count = (route.raw.match(/\d+/) || [1])[0];
+          const uuids = Array.from({ length: Math.min(10, Math.max(1, Number(count))) }, () => generateUuid());
+          toolResult = '**Generated:**\n```\n' + uuids.join('\n') + '\n```';
+          toolLabel = ' (uuid)';
+        } else if (route.handled === 'hash') {
+          const algo = route.raw.match(/sha-?512/i) ? 'sha512' : route.raw.match(/sha-?256/i) ? 'sha256' : route.raw.match(/md5/i) ? 'md5' : 'sha256';
+          const src = route.raw.replace(/\b(hash|sha-?256|sha-?512|md5|encode|of|for|this|the\s+text|below)\b/gi, '').trim();
+          const hash = await hashText(src, algo);
+          toolResult = `**${algo.toUpperCase()}:** \`${hash}\``;
+          toolLabel = ' (hashed)';
+        } else if (route.handled === 'color') {
+          const hex = route.raw.match(/#?[0-9a-f]{3,6}/i)?.[0] || '';
+          const r = convertColor(hex);
+          toolResult = r.error ? '**Error:** ' + r.error : `**HEX:** ${r.hex}\n**RGB:** ${r.rgb}\n**HSL:** ${r.hsl}`;
+          toolLabel = ' (color)';
+        } else if (route.handled === 'timestamp') {
+          const r = convertTimestamp(route.raw);
+          toolResult = r.error ? '**Error:** ' + r.error :
+            `**Unix:** ${r.unix_s}s (${r.unix_ms}ms)\n**ISO:** ${r.iso}\n**Local:** ${r.local}${r.relative ? '\n**Relative:** ' + r.relative : ''}`;
+          toolLabel = ' (timestamp)';
+        } else if (route.handled === 'base') {
+          const r = convertBase(route.raw);
+          toolResult = r.error ? '**Error:** ' + r.error :
+            `**Decimal:** ${r.decimal}\n**Binary:** ${r.binary}\n**Octal:** ${r.octal}\n**Hex:** ${r.hexadecimal}`;
+          toolLabel = ' (converted)';
+        } else if (route.handled === 'csv') {
+          const src = route.raw.replace(/\b(csv\s+to\s+json|convert|parse|the\s+csv|below|this)\b/gi, '').trim();
+          const r = csvToJson(src);
+          toolResult = r.error ? '**Error:** ' + r.error : `**${r.count} rows:**\n\`\`\`json\n${r.json}\n\`\`\``;
+          toolLabel = ' (csv)';
+        } else if (route.handled === 'diff') {
+          const parts = route.raw.split(/\n---+\n|\nvs\.?\n|\ndiff\n/i);
+          if (parts.length >= 2) {
+            const r = diffText(parts[0], parts.slice(1).join('\n'));
+            toolResult = `**${r.additions} additions, ${r.removals} removals:**\n\`\`\`\n${r.diff}\n\`\`\``;
+            toolLabel = ' (diff)';
+          }
+        } else if (route.handled === 'password') {
+          const len = (route.raw.match(/\d+/) || [16])[0];
+          const pw = generatePassword(Math.min(128, Math.max(8, Number(len))));
+          toolResult = '**Generated password:**\n```\n' + pw + '\n```';
+          toolLabel = ' (password)';
+        }
+      } catch (e) { toolResult = '**Tool error:** ' + e.message; }
       if (toolResult) {
         const m = MODELS[state.modelKey];
         addMessageBubble('assistant', toolResult, (m ? m.label : '') + toolLabel);
