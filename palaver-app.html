@@ -699,21 +699,31 @@ body{
             return undefined;
           }
           const baseUrl = key.slice(0, key.lastIndexOf('/') + 1);
-          const collected = [];
+          // For files under ~200MB, accumulate chunks so we can stash the
+          // assembled blob in Cache API for instant offline reloads. For
+          // larger files (Gemma 4 E2B is ~3.4GB), accumulating every chunk
+          // into a second buffer while the ONNX runtime is also loading
+          // them causes peak memory to blow the tab — so the stream passes
+          // through directly without buffering, and we skip the cache write.
+          const LARGE_FILE_THRESHOLD = 200 * 1024 * 1024;
+          const shouldCollect = manifest.totalSize <= LARGE_FILE_THRESHOLD;
+          const collected = shouldCollect ? [] : null;
           let idx = 0;
           const stream = new ReadableStream({
             async pull(controller) {
               if (idx >= manifest.parts.length) {
                 controller.close();
-                realCachePromise.then(async (cacheToStore) => {
-                  if (!cacheToStore) return;
-                  try {
-                    const fullBlob = new Blob(collected);
-                    await cacheToStore.put(key, new Response(fullBlob, {
-                      headers: { 'content-length': String(manifest.totalSize), 'content-type': 'application/octet-stream' },
-                    }));
-                  } catch { /* best-effort caching only */ }
-                });
+                if (shouldCollect) {
+                  realCachePromise.then(async (cacheToStore) => {
+                    if (!cacheToStore) return;
+                    try {
+                      const fullBlob = new Blob(collected);
+                      await cacheToStore.put(key, new Response(fullBlob, {
+                        headers: { 'content-length': String(manifest.totalSize), 'content-type': 'application/octet-stream' },
+                      }));
+                    } catch { /* best-effort caching only */ }
+                  });
+                }
                 return;
               }
               const part = manifest.parts[idx++];
@@ -723,7 +733,7 @@ body{
                 const buf = new Uint8Array(await res.arrayBuffer());
                 const hash = await sha256Hex(buf.buffer);
                 if (hash !== part.sha256) throw new Error('checksum mismatch for ' + part.name);
-                collected.push(buf);
+                if (shouldCollect) collected.push(buf);
                 controller.enqueue(buf);
               } catch (err) {
                 controller.error(new Error('CDN chunk fetch failed (' + part.name + '): ' + err.message));
@@ -751,14 +761,6 @@ body{
         // actually available, which otherwise fails the very first
         // allocation on machines with plenty of free RAM.
         transformersMod.env.backends.onnx.wasm.numThreads = 1;
-        // Gemma 4 E2B's weights are ~3.4GB — the default WASM memory cap
-        // is too small and causes the tab to crash during allocation.
-        // Set a generous ceiling so onnxruntime-web can grow into it.
-        transformersMod.env.backends.onnx.wasm.wasmMemory = {
-          initial: 256,   // 16 MB startup
-          maximum: 65536, // 4 GB ceiling
-          growth: true,
-        };
       }
       let pipelineModelId = modelId;
       if (cdnFolder) {
