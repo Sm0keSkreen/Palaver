@@ -819,16 +819,30 @@ body{
 
     async function loadPipeline(modelId, dtype, device, cdnFolder, task, onProgress) {
       if (!transformersMod) {
+        // Load JSPI ORT first and register it as the global ONNX Runtime.
+        // transformers.js checks globalThis[Symbol.for('onnxruntime')] at
+        // import time — if set, it uses that ORT instance for ALL session
+        // creation and inference.  This avoids the dual-ORT problem where
+        // JSPI sessions return tensors that the bundled asyncify ORT's
+        // isONNXTensor() check doesn't recognize, causing "missing inputs"
+        // errors during forward passes.
+        jspiOrt = await import(${JSON.stringify(JSPI_ORT_CDN)});
+        // Point WASM files at the JSPI builds before transformers.js gets
+        // a chance to set them to the asyncify builds (the env check
+        // `!wasmPaths` skips the overwrite if already set).
+        const jspiWasmBase = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/';
+        jspiOrt.env.wasm.wasmPaths = {
+          mjs:  jspiWasmBase + 'ort-wasm-simd-threaded.jspi.mjs',
+          wasm: jspiWasmBase + 'ort-wasm-simd-threaded.jspi.wasm',
+        };
+        jspiOrt.env.wasm.numThreads = 1;
+        jspiOrt.env.wasm.wasmMemory = { initial: 6144, maximum: 65536, growth: true };
+        globalThis[Symbol.for('onnxruntime')] = jspiOrt;
+
         transformersMod = await import(${JSON.stringify(TRANSFORMERS_CDN)});
-        // Forcing single-threaded WASM avoids onnxruntime-web sizing its
-        // memory arena for a cross-origin-isolated thread count that isn't
-        // actually available, which otherwise fails the very first
-        // allocation on machines with plenty of free RAM.
+        // Apply additional WASM limits through transformers.js env (which
+        // now wraps the JSPI ORT env).
         transformersMod.env.backends.onnx.wasm.numThreads = 1;
-        // Cap WASM memory so onnxruntime-web fails with a catchable error
-        // instead of letting Chrome OOM-kill the tab silently. 6144 pages =
-        // 384 MB initial; max 65536 pages = 4 GB. A model whose weights
-        // exceed this will get a clear error message instead of a blank tab.
         transformersMod.env.backends.onnx.wasm.wasmMemory = {
           initial: 6144,
           maximum: 65536,
@@ -859,13 +873,7 @@ body{
           transformersMod.AutoConfig.from_pretrained(pipelineModelId),
         ]);
 
-        // Load JSPI ORT (separate WASM instance — Blob-backed streaming)
-        if (!jspiOrt) {
-          jspiOrt = await import(${JSON.stringify(JSPI_ORT_CDN)});
-          jspiOrt.env.wasm.numThreads = 1;
-          jspiOrt.env.wasm.wasmMemory = { initial: 6144, maximum: 65536, growth: true };
-        }
-
+        // JSPI ORT is already loaded as the global ORT (see loadPipeline init).
         // Determine execution providers
         const execProviders = device === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm'];
 
