@@ -686,7 +686,14 @@ body{
           if (realCache) {
             try {
               const hit = await realCache.match(key);
-              if (hit) return hit;
+              if (hit) {
+                // A previously-cached large file (e.g. Gemma 4 E2B) would
+                // load its entire body into memory on read — skip the cache
+                // for anything over the threshold to avoid the same crash.
+                const cl = hit.headers.get('content-length');
+                if (cl && Number(cl) > 200 * 1024 * 1024) return undefined;
+                return hit;
+              }
             } catch { /* ignore cache read errors */ }
           }
           if (!looksLikeModelWeightFile(key)) return undefined;
@@ -699,21 +706,30 @@ body{
             return undefined;
           }
           const baseUrl = key.slice(0, key.lastIndexOf('/') + 1);
-          const collected = [];
+          // Files over 200 MB are never accumulated into Cache API — holding
+          // the full assembled blob in memory while the WASM runtime also
+          // allocates for the model easily blows the tab's memory budget.
+          // The stream still passes through to transformers.js; only the
+          // cache-to-disk step is skipped.
+          const SKIP_CACHE_THRESHOLD = 200 * 1024 * 1024;
+          const shouldCache = manifest.totalSize <= SKIP_CACHE_THRESHOLD;
+          const collected = shouldCache ? [] : null;
           let idx = 0;
           const stream = new ReadableStream({
             async pull(controller) {
               if (idx >= manifest.parts.length) {
                 controller.close();
-                realCachePromise.then(async (cacheToStore) => {
-                  if (!cacheToStore) return;
-                  try {
-                    const fullBlob = new Blob(collected);
-                    await cacheToStore.put(key, new Response(fullBlob, {
-                      headers: { 'content-length': String(manifest.totalSize), 'content-type': 'application/octet-stream' },
-                    }));
-                  } catch { /* best-effort caching only */ }
-                });
+                if (shouldCache) {
+                  realCachePromise.then(async (cacheToStore) => {
+                    if (!cacheToStore) return;
+                    try {
+                      const fullBlob = new Blob(collected);
+                      await cacheToStore.put(key, new Response(fullBlob, {
+                        headers: { 'content-length': String(manifest.totalSize), 'content-type': 'application/octet-stream' },
+                      }));
+                    } catch { /* best-effort caching only */ }
+                  });
+                }
                 return;
               }
               const part = manifest.parts[idx++];
@@ -723,7 +739,7 @@ body{
                 const buf = new Uint8Array(await res.arrayBuffer());
                 const hash = await sha256Hex(buf.buffer);
                 if (hash !== part.sha256) throw new Error('checksum mismatch for ' + part.name);
-                collected.push(buf);
+                if (shouldCache) collected.push(buf);
                 controller.enqueue(buf);
               } catch (err) {
                 controller.error(new Error('CDN chunk fetch failed (' + part.name + '): ' + err.message));
