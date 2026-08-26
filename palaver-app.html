@@ -557,7 +557,7 @@ body{
   let userSystemPrompt = null;
   try { userSystemPrompt = localStorage.getItem(SYSTEM_PROMPT_KEY); } catch {}
 
-  const SYSTEM_PROMPT_DEFAULT = 'You are Palaver, a helpful, friendly AI assistant running locally in the browser. Keep replies clear and concise unless asked for detail. You have local tools: calculator for math, date parser for time questions, text counter, JSON formatter, Base64 encoder/decoder, URL parser, UUID generator, hasher, color converter, timestamp converter, base converter, CSV parser, diff tool, and password generator. These tools intercept messages before you see them, so you will never be asked to do math or dates yourself.';
+  const SYSTEM_PROMPT_DEFAULT = 'You are Palaver, a helpful, friendly AI assistant running locally in the browser. Keep replies clear and concise unless asked for detail.';
   function getSystemPrompt() { return userSystemPrompt || SYSTEM_PROMPT_DEFAULT; }
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
