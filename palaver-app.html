@@ -388,6 +388,14 @@ body{
 .msg .bubble .cursor{display:inline-block;width:7px;height:1em;background:var(--text-dim);vertical-align:text-bottom;margin-left:1px;animation:blink 1s step-start infinite;}
 @keyframes blink{50%{opacity:0;}}
 .msg .model-tag{font-size:10px;color:var(--text-dim);margin-top:4px;}
+.msg{position:relative;}
+.msg .msg-actions{position:absolute;top:0;right:0;display:none;gap:4px;}
+.msg:hover .msg-actions{display:flex;}
+.msg-actions .btn{padding:2px 6px;font-size:11px;opacity:.7;}
+.msg-actions .btn:hover{opacity:1;}
+.msg.editing .bubble{outline:2px solid var(--accent);outline-offset:2px;}
+.msg textarea.msg-edit{width:100%;min-height:60px;resize:vertical;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font:inherit;font-size:13px;line-height:1.5;margin-top:6px;}
+.msg textarea.msg-edit:focus{outline:none;border-color:var(--accent);}
 
 /* ---------- Composer ---------- */
 .composer{
@@ -433,7 +441,7 @@ body{
 <div id="app">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <div class="brand">Palaver</div>
+      <div class="brand">Palaver <span style="font-weight:400;font-size:11px;color:var(--text-dim)">v37</span></div>
       <button class="btn ghost small" id="sidebarCollapseBtn" title="Collapse sidebar">‹</button>
     </div>
     <button class="btn primary new-chat-btn" id="newChatBtn">+ New chat</button>
@@ -465,6 +473,11 @@ body{
           <div class="label">Thinking</div>
           <div class="row">
             <button class="btn small" id="thinkingModeBtn">Thinking mode: Off</button>
+          </div>
+          <div class="label">System prompt</div>
+          <div class="row" style="flex-direction:column;width:100%">
+            <textarea id="systemPromptInput" rows="3" style="width:100%;resize:vertical;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font:inherit;font-size:12px;line-height:1.4"></textarea>
+            <button class="btn small" id="saveSystemPromptBtn" style="align-self:flex-end;margin-top:4px">Save</button>
           </div>
 
         </div>
@@ -540,7 +553,12 @@ body{
   };
   const DEFAULT_MODEL = 'gemma270m';
 
-  const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail. You have access to local tools: a calculator for math, a date parser for time/date questions. Use them when appropriate , never hallucinate math results or timestamps.';
+  const SYSTEM_PROMPT_KEY = 'palaver-system-prompt';
+  let userSystemPrompt = null;
+  try { userSystemPrompt = localStorage.getItem(SYSTEM_PROMPT_KEY); } catch {}
+
+  const SYSTEM_PROMPT_DEFAULT = 'You are Palaver, a helpful, friendly AI assistant running locally in the browser. Keep replies clear and concise unless asked for detail. You have local tools: calculator for math, date parser for time questions, text counter, JSON formatter, Base64 encoder/decoder, URL parser, UUID generator, hasher, color converter, timestamp converter, base converter, CSV parser, diff tool, and password generator. These tools intercept messages before you see them, so you will never be asked to do math or dates yourself.';
+  function getSystemPrompt() { return userSystemPrompt || SYSTEM_PROMPT_DEFAULT; }
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
   // A loaded model stays resident across messages , no idle-unload timer.
@@ -1900,12 +1918,166 @@ body{
       col.appendChild(tag);
       wrap._tag = tag;
     }
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    if (role === 'user') {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn ghost small';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => startEditMessage(wrap));
+      actions.appendChild(editBtn);
+    }
+    if (role === 'assistant') {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn ghost small';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => startEditMessage(wrap));
+      actions.appendChild(editBtn);
+      const regenBtn = document.createElement('button');
+      regenBtn.className = 'btn ghost small';
+      regenBtn.textContent = 'Regen';
+      regenBtn.addEventListener('click', () => regenerateMessage(wrap));
+      actions.appendChild(regenBtn);
+    }
+    wrap.appendChild(actions);
     wrap.appendChild(avatar);
     wrap.appendChild(col);
     chatScroll.appendChild(wrap);
     wrap._bubble = bubble;
     scrollToBottom();
     return wrap;
+  }
+
+  function findMsgIndex(wrap) {
+    const bubbles = chatScroll.querySelectorAll('.msg');
+    for (let i = 0; i < bubbles.length; i++) {
+      if (bubbles[i] === wrap) return i;
+    }
+    return -1;
+  }
+
+  function startEditMessage(wrap) {
+    if (state.generating) return;
+    const idx = findMsgIndex(wrap);
+    if (idx === -1 || idx >= state.messages.length) return;
+    const msg = state.messages[idx];
+    wrap.classList.add('editing');
+    const textarea = document.createElement('textarea');
+    textarea.className = 'msg-edit';
+    textarea.value = msg.content;
+    wrap._bubble.style.display = 'none';
+    wrap._bubble.parentNode.insertBefore(textarea, wrap._bubble.nextSibling);
+    textarea.focus();
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'btn small primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.style.marginTop = '6px';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn small';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.marginTop = '6px';
+    const btnRow = document.createElement('div');
+    btnRow.style.display = 'flex';
+    btnRow.style.gap = '6px';
+    btnRow.appendChild(saveBtn);
+    btnRow.appendChild(cancelBtn);
+    textarea.parentNode.insertBefore(btnRow, textarea.nextSibling);
+    function cleanup() {
+      textarea.remove();
+      btnRow.remove();
+      wrap._bubble.style.display = '';
+      wrap.classList.remove('editing');
+    }
+    cancelBtn.addEventListener('click', cleanup);
+    saveBtn.addEventListener('click', () => {
+      const newContent = textarea.value.trim();
+      if (!newContent) return;
+      msg.content = newContent;
+      setBubbleContent(wrap._bubble, msg.role, newContent);
+      cleanup();
+      persistCurrentChat();
+      // If editing a user message, remove all messages after it and re-send
+      if (msg.role === 'user') {
+        state.messages.splice(idx + 1);
+        const bubbles = chatScroll.querySelectorAll('.msg');
+        for (let i = idx + 1; i < bubbles.length; i++) bubbles[i].remove();
+        renderMsgCount();
+        // Re-trigger generation for the edited user message
+        composerInput.value = '';
+        doSendWithHistory(idx);
+      }
+    });
+  }
+
+  async function doSendWithHistory(upToIdx) {
+    if (state.generating) return;
+    state.generating = true;
+    state.stopRequested = false;
+    state.genTokens = 0;
+    state.genStartedAt = Date.now();
+    updateSendBtn();
+    const modelKeyAtStart = state.modelKey;
+    const wireMessages = alternateMessages([
+      { role: 'system', content: getSystemPrompt() },
+      ...buildContextMessages(state.messages.slice(0, upToIdx + 1)).map((m) => ({
+        role: m.role,
+        content: m.role === 'assistant' ? (splitThinking(m.content).answer || m.content) : m.content,
+      })),
+    ]);
+    const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true, thinking: state.thinkingEnabled };
+    state.genMaxTokens = estimateOutputTokens(wireMessages, MAX_NEW_TOKENS);
+    const wrap = addMessageBubble('assistant', '', MODELS[modelKeyAtStart].label);
+    currentGenWrap = wrap;
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    wrap._bubble.appendChild(cursor);
+    let acc = '';
+    try {
+      await runGenerate(modelKeyAtStart, wireMessages, genOpts, (chunk) => {
+        acc += chunk;
+        state.genTokens += 1;
+        wrap._rawText = acc;
+        setBubbleContent(wrap._bubble, 'assistant', acc);
+        wrap._bubble.appendChild(cursor);
+        scrollToBottom();
+        updateSendBtn();
+      });
+      if (!state.stopRequested) {
+        const finalText = (acc || '').trim();
+        cursor.remove();
+        setBubbleContent(wrap._bubble, 'assistant', finalText || '(no response)');
+        state.messages.push({ role: 'assistant', content: finalText, modelLabel: MODELS[modelKeyAtStart].label });
+        renderMsgCount();
+        persistCurrentChat();
+      }
+    } catch (err) {
+      if (!state.stopRequested) {
+        cursor.remove();
+        setBubbleContent(wrap._bubble, 'assistant', acc ? acc + '\n\n[generation failed]' : 'Something went wrong.');
+        state.messages.push({ role: 'assistant', content: acc.trim() || '(failed)', modelLabel: MODELS[modelKeyAtStart] ? MODELS[modelKeyAtStart].label : undefined });
+        renderMsgCount();
+        persistCurrentChat();
+      }
+    } finally {
+      currentGenWrap = null;
+      state.generating = false;
+      updateSendBtn();
+    }
+  }
+
+  function regenerateMessage(wrap) {
+    if (state.generating) return;
+    const idx = findMsgIndex(wrap);
+    if (idx === -1 || idx >= state.messages.length) return;
+    // Remove this message and everything after it
+    state.messages.splice(idx);
+    const bubbles = chatScroll.querySelectorAll('.msg');
+    for (let i = idx; i < bubbles.length; i++) bubbles[i].remove();
+    renderMsgCount();
+    // Re-send from the previous user message
+    const lastUserIdx = state.messages.map((m) => m.role).lastIndexOf('user');
+    if (lastUserIdx === -1) return;
+    doSendWithHistory(lastUserIdx);
   }
 
   /* --------------------------- Chat history (sidebar) ---------------------- */
@@ -2122,6 +2294,15 @@ body{
     state.thinkingEnabled = !state.thinkingEnabled;
     try { localStorage.setItem(THINKING_MODE_KEY, state.thinkingEnabled ? '1' : '0'); } catch { /* ignore */ }
     updateThinkingModeBtn();
+  });
+
+  const systemPromptInput = $('#systemPromptInput');
+  const saveSystemPromptBtn = $('#saveSystemPromptBtn');
+  systemPromptInput.value = getSystemPrompt();
+  saveSystemPromptBtn.addEventListener('click', () => {
+    userSystemPrompt = systemPromptInput.value.trim() || null;
+    try { localStorage.setItem(SYSTEM_PROMPT_KEY, userSystemPrompt || ''); } catch {}
+    flashSendBtn('System prompt saved', 1400);
   });
 
   sidebarCollapseBtn.addEventListener('click', () => {
@@ -2344,7 +2525,7 @@ body{
     // any message that never had a thinking block, so this is safe for
     // every model.
     const wireMessages = alternateMessages([
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: getSystemPrompt() },
       ...buildContextMessages(state.messages).map((m) => ({
         role: m.role,
         content: m.role === 'assistant' ? (splitThinking(m.content).answer || m.content) : m.content,
