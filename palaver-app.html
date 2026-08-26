@@ -505,6 +505,7 @@ body{
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/mathjs@13.2.2/lib/browser/math.js"></script>
 <script>
 /* Palaver: an offline AI chat. Every model runs entirely on-device via
    transformers.js , nothing you type ever leaves the browser. Model
@@ -657,7 +658,7 @@ body{
 
   async function loadMathJS() {
     if (mathjs) return mathjs;
-    mathjs = await import(MATHJS_CDN);
+    mathjs = math;
     return mathjs;
   }
 
@@ -2394,13 +2395,12 @@ body{
     composerInput.value = '';
     autoGrow();
 
-    state.messages.push({ role: 'user', content: text });
     addMessageBubble('user', text);
-    renderMsgCount();
-    persistCurrentChat();
 
     // ---- Heuristic pre-routing for local tools ----
     // Deterministic tools that offload work the 1B model would hallucinate.
+    // Tool results are shown directly and never pushed to state.messages,
+    // so the model's conversation history stays clean.
     const route = heuristicRoute(text);
     if (route.handled) {
       let toolResult = '';
@@ -2498,15 +2498,18 @@ body{
       }
     }
 
+    state.messages.push({ role: 'user', content: text });
+    renderMsgCount();
+    persistCurrentChat();
+
     try {
       await ensureModel(state.modelKey);
     } catch (err) {
       const base = "Sorry , I couldn't load the AI model on this device.";
       const msg = (err && err.message) ? `${base}\n\n${err.message}` : base;
       addMessageBubble('assistant', msg, MODELS[state.modelKey].label);
-      // The user turn above was already pushed to state.messages before this
-      // load attempt , every model here requires strictly alternating
-      // user/assistant turns, so a load failure needs a paired assistant
+      // Model load failed after user turn was pushed, need paired assistant
+      // turn or next send pushes two consecutive user turns and breaks generation.
       // turn recorded too, or the next send pushes a second consecutive
       // user turn and breaks generation even after a model that does load.
       state.messages.push({ role: 'assistant', content: msg, modelLabel: MODELS[state.modelKey].label });
