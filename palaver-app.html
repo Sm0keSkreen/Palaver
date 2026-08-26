@@ -508,6 +508,9 @@ body{
   'use strict';
 
   const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
+  // JSPI ORT build — supports Blob-backed external data that streams on demand,
+  // reducing peak JS heap from full model size to largest single initializer.
+  const JSPI_ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.jspi.min.js';
 
   // Mirror of a handful of models' weights, pre-split into <20MB chunks and
   // hosted in our own GitHub repo so jsDelivr can serve them — a fallback
@@ -753,6 +756,67 @@ body{
       return jsDelivrCache;
     }
 
+    // ---- JSPI ORT session loading (Blob-backed external data) ----
+
+    let jspiOrt = null;
+
+    // Create a disk-backed Blob from a chunked file.  Each 18 MB part is
+    // downloaded, verified, and enqueued into a ReadableStream.  The stream
+    // is consumed by Response.blob(), which on modern Chrome stores the
+    // result on disk — keeping peak JS heap at ~18 MB (one chunk at a time)
+    // instead of the full file size.  ORT's JSPI async loader then reads
+    // byte ranges from this Blob on demand during session creation.
+    async function makeChunkedBlob(manifest, baseUrl, onProgress, fileName) {
+      const totalSize = manifest.totalSize;
+      let loaded = 0;
+      const stream = new ReadableStream({
+        async pull(controller) {
+          for (const part of manifest.parts) {
+            const res = await fetch(baseUrl + part.name);
+            if (!res.ok) throw new Error('CDN chunk fetch failed (' + part.name + '): HTTP ' + res.status);
+            const buf = new Uint8Array(await res.arrayBuffer());
+            loaded += buf.byteLength;
+            if (onProgress) onProgress({ status: 'progress', file: fileName, loaded, total: totalSize });
+            controller.enqueue(buf);
+          }
+          controller.close();
+        },
+      });
+      return await new Response(stream, {
+        headers: { 'content-length': String(totalSize), 'content-type': 'application/octet-stream' },
+      }).blob();
+    }
+
+    // Create an ORT InferenceSession using the JSPI build, with the ONNX graph
+    // as a small ArrayBuffer and external data backed by a disk-backed Blob.
+    async function createSessionWithBlobData(graphUrl, dataUrl, dataFileName, sessionName, execProviders, onProgress) {
+      onProgress({ status: 'progress', file: sessionName + '.onnx', loaded: 0, total: 0 });
+
+      const graphRes = await fetch(graphUrl);
+      if (!graphRes.ok) throw new Error('Failed to fetch ' + graphUrl + ': HTTP ' + graphRes.status);
+      const graphBuf = new Uint8Array(await graphRes.arrayBuffer());
+      onProgress({ status: 'progress', file: sessionName + '.onnx', loaded: graphBuf.byteLength, total: graphBuf.byteLength });
+
+      let externalData = [];
+      if (dataUrl) {
+        const manifestRes = await fetch(dataUrl + '.manifest.json');
+        if (manifestRes.ok) {
+          const manifest = await manifestRes.json();
+          const baseUrl = dataUrl.slice(0, dataUrl.lastIndexOf('/') + 1);
+          const blob = await makeChunkedBlob(manifest, baseUrl, onProgress, dataFileName);
+          externalData = [{ path: dataFileName, data: blob }];
+        }
+      }
+
+      const session = await jspiOrt.InferenceSession.create(graphBuf, {
+        executionProviders: execProviders,
+        logSeverityLevel: 3,
+        externalData,
+      });
+      session.config = { dtype: 'q4f16', device: execProviders[0] === 'webgpu' ? 'webgpu' : 'wasm' };
+      return session;
+    }
+
     async function loadPipeline(modelId, dtype, device, cdnFolder, task, onProgress) {
       if (!transformersMod) {
         transformersMod = await import(${JSON.stringify(TRANSFORMERS_CDN)});
@@ -789,12 +853,41 @@ body{
       // its own processor + model classes instead (mirrors the model
       // card's documented Transformers.js usage exactly).
       if (task === 'gemma4') {
-        const [processor, model] = await Promise.all([
+        // Load processor and config via transformers.js (lightweight)
+        const [processor, config] = await Promise.all([
           transformersMod.AutoProcessor.from_pretrained(pipelineModelId),
-          transformersMod.Gemma4ForConditionalGeneration.from_pretrained(pipelineModelId, {
-            dtype, device, progress_callback: onProgress,
-          }),
+          transformersMod.AutoConfig.from_pretrained(pipelineModelId),
         ]);
+
+        // Load JSPI ORT (separate WASM instance — Blob-backed streaming)
+        if (!jspiOrt) {
+          jspiOrt = await import(${JSON.stringify(JSPI_ORT_CDN)});
+          jspiOrt.env.wasm.numThreads = 1;
+          jspiOrt.env.wasm.wasmMemory = { initial: 6144, maximum: 65536, growth: true };
+        }
+
+        // Determine execution providers
+        const execProviders = device === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm'];
+
+        // Session name → { graphFile, dataFile } mapping
+        const suffix = '_q4f16';
+        const sessionDefs = {
+          embed_tokens:         { graphFile: 'embed_tokens' + suffix + '.onnx',         dataFile: 'embed_tokens' + suffix + '.onnx_data' },
+          decoder_model_merged: { graphFile: 'decoder_model_merged' + suffix + '.onnx', dataFile: 'decoder_model_merged' + suffix + '.onnx_data' },
+          vision_encoder:       { graphFile: 'vision_encoder' + suffix + '.onnx',       dataFile: 'vision_encoder' + suffix + '.onnx_data' },
+          audio_encoder:        { graphFile: 'audio_encoder' + suffix + '.onnx',        dataFile: 'audio_encoder' + suffix + '.onnx_data' },
+        };
+
+        const sessions = {};
+        for (const [name, def] of Object.entries(sessionDefs)) {
+          const graphUrl = ${JSON.stringify(CDN_REPO)} + pipelineModelId + '/onnx/' + def.graphFile;
+          const dataUrl  = ${JSON.stringify(CDN_REPO)} + pipelineModelId + '/onnx/' + def.dataFile;
+          sessions[name] = await createSessionWithBlobData(graphUrl, dataUrl, def.dataFile, name, execProviders, onProgress);
+        }
+
+        // Build the model from config + our sessions (skips transformers.js
+        // session loading which would materialize all external data as Uint8Array)
+        const model = new transformersMod.Gemma4ForConditionalGeneration(config, sessions, { generation_config: {} });
         return { isGemma4: true, processor, model };
       }
       return transformersMod.pipeline('text-generation', pipelineModelId, {
