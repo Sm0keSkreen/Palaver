@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Palaver — offline AI chat</title>
+<title>Palaver , offline AI chat</title>
 <style>
 :root{
-  /* Midnight (default): deep navy, monochrome blue — same palette as Emend */
+  /* Midnight (default): deep navy, monochrome blue , same palette as Emend */
   --bg:#080b11;
   --panel:#0d121a;
   --panel-2:#111826;
@@ -494,7 +494,7 @@ body{
 
 <script>
 /* Palaver: an offline AI chat. Every model runs entirely on-device via
-   transformers.js — nothing you type ever leaves the browser. Model
+   transformers.js , nothing you type ever leaves the browser. Model
    download and text generation both happen inside a dedicated Web Worker
    (same approach as Emend's AI Check), so the page stays responsive and can
    show live progress instead of freezing while the WASM/WebGPU backend does
@@ -503,7 +503,7 @@ body{
   'use strict';
 
   const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-  // JSPI ORT build — supports Blob-backed external data that streams on demand,
+  // JSPI ORT build , supports Blob-backed external data that streams on demand,
   // reducing peak JS heap from full model size to largest single initializer.
   const JSPI_ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.jspi.min.mjs';
   const MATHJS_CDN = 'https://cdn.jsdelivr.net/npm/mathjs@13.2.2/lib/browser/math.js';
@@ -512,7 +512,7 @@ body{
   const DAYJS_ADVANCEDFORMAT_CDN = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/plugin/advancedFormat.js';
 
   // Mirror of a handful of models' weights, pre-split into <20MB chunks and
-  // hosted in our own GitHub repo so jsDelivr can serve them — a fallback
+  // hosted in our own GitHub repo so jsDelivr can serve them , a fallback
   // path for anyone who can't reach huggingface.co directly. Only models
   // listed here (via `cdnFolder`) use it; everything else loads from HF
   // exactly as before. See palaver-models repo's onnx/*.manifest.json for
@@ -525,7 +525,7 @@ body{
     // Gemma 4's smallest tier. It's multimodal under the hood (vision +
     // audio encoders are part of every download, even though this app only
     // ever sends text) and uses very large per-layer embedding tables, so
-    // despite the "2B effective params" name the real download is ~3.4GB —
+    // despite the "2B effective params" name the real download is ~3.4GB ,
     // several times heavier than Gemma 1B above, and in the same size class
     // as models that can fail to load at all on lower-memory devices. It
     // also doesn't fit transformers.js's normal pipeline() helper: it needs
@@ -540,10 +540,10 @@ body{
   };
   const DEFAULT_MODEL = 'gemma270m';
 
-  const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail. You have access to local tools: a calculator for math, a date parser for time/date questions. Use them when appropriate — never hallucinate math results or timestamps.';
+  const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail. You have access to local tools: a calculator for math, a date parser for time/date questions. Use them when appropriate , never hallucinate math results or timestamps.';
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
-  // A loaded model stays resident across messages — no idle-unload timer.
+  // A loaded model stays resident across messages , no idle-unload timer.
   // The only thing that discards a worker is ensureModel() loading a
   // *different* model than whatever's currently resident (see "Keep at most
   // one model resident at a time" below), so switching models is still the
@@ -791,7 +791,7 @@ body{
     }
 
     // Model weight URLs always look like ".../onnx/<name>.onnx" or
-    // ".../onnx/<name>.onnx_data[_N]" — the only files that are ever split
+    // ".../onnx/<name>.onnx_data[_N]" , the only files that are ever split
     // into chunks in the CDN mirror. Everything else (tokenizer.json,
     // config.json, etc.) is a normal single small file.
     function looksLikeModelWeightFile(url) {
@@ -809,7 +809,7 @@ body{
     // Storage bucket. For a chunked weight file (recognized by a sibling
     // "<file>.manifest.json"), it lazily fetches each chunk, verifies its
     // SHA-256 against the manifest, and streams the bytes back so
-    // transformers.js's own download-progress UI keeps working — then
+    // transformers.js's own download-progress UI keeps working , then
     // stashes the fully-assembled file in the real cache in the background
     // so the next load of the same model is instant.
     function getJsDelivrCache() {
@@ -830,7 +830,7 @@ body{
           let manifest;
           try {
             const mRes = await fetch(key + '.manifest.json');
-            if (!mRes.ok) return undefined; // not a chunked file — fall through to a normal fetch
+            if (!mRes.ok) return undefined; // not a chunked file , fall through to a normal fetch
             manifest = await mRes.json();
           } catch {
             return undefined;
@@ -840,7 +840,7 @@ body{
           // assembled blob in Cache API for instant offline reloads. For
           // larger files (Gemma 4 E2B is ~3.4GB), accumulating every chunk
           // into a second buffer while the ONNX runtime is also loading
-          // them causes peak memory to blow the tab — so the stream passes
+          // them causes peak memory to blow the tab , so the stream passes
           // through directly without buffering, and we skip the cache write.
           const LARGE_FILE_THRESHOLD = 200 * 1024 * 1024;
           const shouldCollect = manifest.totalSize <= LARGE_FILE_THRESHOLD;
@@ -897,7 +897,7 @@ body{
     // Create a disk-backed Blob from a chunked file.  Each 18 MB part is
     // downloaded, verified, and enqueued into a ReadableStream.  The stream
     // is consumed by Response.blob(), which on modern Chrome stores the
-    // result on disk — keeping peak JS heap at ~18 MB (one chunk at a time)
+    // result on disk , keeping peak JS heap at ~18 MB (one chunk at a time)
     // instead of the full file size.  ORT's JSPI async loader then reads
     // byte ranges from this Blob on demand during session creation.
     async function makeChunkedBlob(manifest, baseUrl, onProgress, fileName) {
@@ -1002,7 +1002,7 @@ body{
         transformersMod.env.useCustomCache = false;
         transformersMod.env.customCache = null;
       }
-      // Gemma 4 is a multimodal any-to-any model — transformers.js has no
+      // Gemma 4 is a multimodal any-to-any model , transformers.js has no
       // pipeline('text-generation', ...) support for it, so it's loaded via
       // its own processor + model classes instead (mirrors the model
       // card's documented Transformers.js usage exactly).
@@ -1096,14 +1096,14 @@ body{
             // Gemma 4's own model card shows message content as an array of
             // typed parts ({ type: 'text', text: ... }), but that shape
             // actually throws inside this model's chat template ("Unknown
-            // ArrayValue filter: trim") — live-tested against the real
+            // ArrayValue filter: trim") , live-tested against the real
             // processor before shipping this. Plain string content (the
             // same shape every other model in this app already uses) works
             // correctly, so messages are passed through unchanged.
             const { processor, model } = pipe;
             // Gemma 4's docs: thinking is triggered by putting a literal
             // "<|think|>" token at the start of the system prompt, plus
-            // passing enable_thinking to the template — both are needed,
+            // passing enable_thinking to the template , both are needed,
             // one alone isn't enough per the model card.
             const thinking = !!genOpts.thinking;
             const chatMessages = thinking
@@ -1124,7 +1124,7 @@ body{
               },
             });
             // Google's documented sampling defaults for Gemma 4, not this
-            // app's usual temperature/top_p — do_sample still comes from
+            // app's usual temperature/top_p , do_sample still comes from
             // genOpts so Stop behaves the same as other models. max_new_tokens
             // gets a bigger floor when thinking is on: the reasoning trace
             // itself consumes part of that budget, and without headroom a
@@ -1186,7 +1186,7 @@ body{
       // This top-level handler fires for errors that never made it through
       // the normal postMessage-based load/generate error paths (a crash in
       // the worker script itself, for example), so there's no `key` on the
-      // event — attribute it to whichever model was actively loading, if any.
+      // event , attribute it to whichever model was actively loading, if any.
       if (state.loading) state.loadErrorMessages[state.loading] = message;
     };
     return w;
@@ -1261,7 +1261,7 @@ body{
 
     // Keep at most one model resident at a time. Every pipeline that loads
     // successfully stays in the worker's memory until the worker is
-    // discarded — loading a second model on top of an already-loaded one
+    // discarded , loading a second model on top of an already-loaded one
     // is exactly what pushes total WASM/GPU memory over a device's ceiling.
     // Free whatever's currently loaded before pulling in a different model.
     const otherResident = Object.keys(state.pipelinesReady).find((k) => state.pipelinesReady[k] && k !== key);
@@ -1299,7 +1299,7 @@ body{
   // shipped (saved to localStorage with two consecutive same-role turns)
   // would otherwise keep failing forever with no way to recover short of
   // starting a new chat. Run this on the outgoing message list right before
-  // every send instead of trusting history to already be well-formed —
+  // every send instead of trusting history to already be well-formed ,
   // merging consecutive same-role turns together self-heals an already-
   // broken chat, and costs nothing when history is already fine.
   function alternateMessages(msgs) {
@@ -1315,19 +1315,19 @@ body{
     return out;
   }
 
-  // Characters, not tokens — an exact count would need a real tokenizer call
+  // Characters, not tokens , an exact count would need a real tokenizer call
   // (done inside the worker, off this thread), and the same ~4 chars/token
   // heuristic already used by estimateOutputTokens() above is close enough
   // for a soft budget. Without a cap, a long-running chat would eventually
   // just exceed a model's context window outright; well before that, more
-  // history means a bigger KV cache and slower generation on every turn —
+  // history means a bigger KV cache and slower generation on every turn ,
   // a real cost on a memory-constrained device. ~12000 chars (~3000 tokens)
   // is enough for a handful of back-and-forth turns while keeping that cost
   // small; tune this constant if that trade-off should shift either way.
   const MAX_CONTEXT_CHARS = 12000;
 
   // The full conversation stays in state.messages (and gets shown/saved as
-  // normal) — this only trims what actually gets sent to the model each
+  // normal) , this only trims what actually gets sent to the model each
   // turn, oldest messages first, and always keeps at least the most recent
   // message so a very long single message still gets sent rather than
   // dropped entirely.
@@ -1365,7 +1365,7 @@ body{
       div.innerHTML = `<span class="name">${m.label}</span><span class="meta">${unavailable ? 'Unavailable on this device' : m.meta}</span>`;
       // Set via property (not baked into the innerHTML string above) so an
       // error message containing quotes or HTML-special characters can't
-      // break the markup — the title shows the real reason on hover instead
+      // break the markup , the title shows the real reason on hover instead
       // of making you dig through Debug mode to find out why.
       if (unavailable && state.loadErrorMessages[key]) div.title = state.loadErrorMessages[key];
       div.addEventListener('click', () => selectModel(key));
@@ -1481,7 +1481,7 @@ body{
       setProgressFill(0);
       aiProgressLabel.textContent = 'Send';
       engineStatus.textContent = state.pipelinesReady[state.modelKey]
-        ? `Ready — ${MODELS[state.modelKey].label}`
+        ? `Ready , ${MODELS[state.modelKey].label}`
         : 'Ready';
     }
   }
@@ -1498,12 +1498,12 @@ body{
   }
 
   // Assistant replies commonly come back with markdown syntax (**bold**,
-  // `code`, lists, links, headers) — this renders that deliberately small
+  // `code`, lists, links, headers) , this renders that deliberately small
   // subset rather than implementing full CommonMark, so this stays a
   // hand-rolled ~40-line function instead of pulling in an external library
   // (Palaver is otherwise fully self-contained apart from transformers.js
   // itself). Raw HTML is escaped BEFORE any markdown syntax is applied, so
-  // text a model generates can never inject markup — only the tags this
+  // text a model generates can never inject markup , only the tags this
   // code itself constructs ever reach innerHTML. User messages are shown as
   // plain text elsewhere; this is only ever used for assistant replies.
   function escapeHtml(s) {
@@ -1560,7 +1560,7 @@ body{
         const codeLines = [];
         i++;
         while (i < lines.length && !/^```\s*$/.test(lines[i])) { codeLines.push(lines[i]); i++; }
-        i++; // skip closing fence (or run off the end if unclosed — still renders what streamed in)
+        i++; // skip closing fence (or run off the end if unclosed , still renders what streamed in)
         html.push('<pre><code>' + escapeHtml(codeLines.join('\n')) + '</code></pre>');
         continue;
       }
@@ -1608,8 +1608,8 @@ body{
   // "<|channel>thought\n...<channel|>" before the actual answer (see the
   // WORKER_SRC generate handler, which prepends the <|think|> trigger token
   // when genOpts.thinking is set). No other model in this app ever produces
-  // this marker, so this is a harmless no-op — {thought: '', answer: raw}
-  // — for every reply that isn't Gemma 4 with thinking on.
+  // this marker, so this is a harmless no-op , {thought: '', answer: raw}
+  // , for every reply that isn't Gemma 4 with thinking on.
   function splitThinking(raw) {
     const openTag = '<|channel>thought';
     const closeTag = '<channel|>';
@@ -1665,7 +1665,7 @@ body{
   }
 
   /* --------------------------- Chat history (sidebar) ---------------------- */
-  // Every conversation is stored client-side only, in localStorage — nothing
+  // Every conversation is stored client-side only, in localStorage , nothing
   // ever leaves the browser, same as the model inference itself.
 
   function loadChatsFromStorage() {
@@ -1915,7 +1915,7 @@ body{
   function stopGenerating() {
     // transformers.js doesn't expose a clean mid-stream abort, so the
     // reliable way to actually stop token generation (not just stop
-    // *listening* to it) is to discard the worker producing it — same
+    // *listening* to it) is to discard the worker producing it , same
     // recovery trick used when a model fails to load. The model is cached
     // by the browser after the first download, so reloading it into the
     // fresh worker is fast, not a re-download.
@@ -1925,7 +1925,7 @@ body{
     state.pipelinesReady = {};
     // pendingGen.clear() below drops the in-flight generate's resolvers
     // without ever calling resolve/reject, so doSend()'s `await
-    // runGenerate(...)` simply hangs forever — its try/catch/finally never
+    // runGenerate(...)` simply hangs forever , its try/catch/finally never
     // runs. That means THIS function is the only place a stopped turn ever
     // gets recorded, and it must record something: every model here enforces
     // strict user/assistant alternation in its chat template (Gemma throws
@@ -1933,12 +1933,12 @@ body{
     // pushes the user's message before generation starts. Leaving that
     // without a paired assistant reply means the very next send pushes a
     // second consecutive user turn and every future generation on this chat
-    // fails outright — so the partial reply (or a placeholder, if nothing
+    // fails outright , so the partial reply (or a placeholder, if nothing
     // streamed in yet) is saved here as the assistant turn.
     pendingGen.clear();
     if (currentGenWrap && currentGenWrap._bubble) {
       // Read the raw markdown source tracked alongside the rendered HTML
-      // (currentGenWrap._rawText), not the bubble's rendered .textContent —
+      // (currentGenWrap._rawText), not the bubble's rendered .textContent ,
       // once replies are markdown-rendered, .textContent would return tags
       // stripped of their markdown syntax (e.g. "**hi**" already rendered
       // to <strong>hi</strong> reads back as just "hi"), corrupting both
@@ -2008,11 +2008,11 @@ body{
     try {
       await ensureModel(state.modelKey);
     } catch (err) {
-      const base = "Sorry — I couldn't load the AI model on this device.";
+      const base = "Sorry , I couldn't load the AI model on this device.";
       const msg = (err && err.message) ? `${base}\n\n${err.message}` : base;
       addMessageBubble('assistant', msg, MODELS[state.modelKey].label);
       // The user turn above was already pushed to state.messages before this
-      // load attempt — every model here requires strictly alternating
+      // load attempt , every model here requires strictly alternating
       // user/assistant turns, so a load failure needs a paired assistant
       // turn recorded too, or the next send pushes a second consecutive
       // user turn and breaks generation even after a model that does load.
@@ -2025,7 +2025,7 @@ body{
     const modelKeyAtStart = state.modelKey;
     // Gemma 4's own docs are explicit that a previous turn's thinking trace
     // must not be replayed back as history ("Thoughts from previous model
-    // turns must not be added before the next user turn begins") — a stored
+    // turns must not be added before the next user turn begins") , a stored
     // assistant message keeps the full raw text (with the thinking block)
     // so it still displays/collapses correctly when revisited, but only the
     // answer portion goes out over the wire. splitThinking() is a no-op for
@@ -2038,7 +2038,7 @@ body{
         content: m.role === 'assistant' ? (splitThinking(m.content).answer || m.content) : m.content,
       })),
     ]);
-    // thinking is read by the worker for all models —
+    // thinking is read by the worker for all models ,
     // safe to include unconditionally here.
     const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true, thinking: state.thinkingEnabled };
 

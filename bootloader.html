@@ -1,84 +1,25 @@
 <!doctype html>
-<!--
-  Palaver bootloader
-  -------------------
-  Paste this wherever you need a live copy of Palaver (any HTML-accepting
-  box: an online previewer, a CodePen, a wiki embed, whatever).
-
-  Two jsDelivr quirks this file works around (same as Emend's bootloader):
-
-  1. jsDelivr serves .html files from GitHub with a `text/plain`
-     content-type, so a plain `src="...palaver-app.html"` iframe would show
-     raw source text instead of rendering it. Fix: fetch the file as text,
-     then hand that text to an iframe via `srcdoc` instead of `src`.
-
-  2. jsDelivr's `@main` branch alias is a MUTABLE cache key — different edge
-     nodes can serve different cached versions of the file for a while after
-     a push. A jsDelivr URL pinned to an exact commit SHA is immutable, so
-     on every load this file first asks GitHub's API for the current HEAD
-     commit of main, then builds a commit-pinned jsDelivr URL from that. If
-     the API call fails for any reason it falls back to the plain @main URL.
--->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Palaver</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; background: #080b11; }
-  iframe { display: block; width: 100%; height: 100%; border: 0; }
-  #boot-status {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #9fb3c8; font: 14px system-ui, -apple-system, sans-serif; background: #080b11;
-    text-align: center; padding: 24px; box-sizing: border-box;
-  }
+html,body{margin:0;padding:0;height:100%;background:#080b11}
+iframe{display:block;width:100%;height:100%;border:0}
+#boot-status{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#9fb3c8;font:14px system-ui,-apple-system,sans-serif;background:#080b11;text-align:center;padding:24px;box-sizing:border-box}
 </style>
 </head>
 <body>
 <div id="boot-status">Loading Palaver…</div>
 <script>
-(function () {
-  var REPO = 'Sm0keSkreen/Palaver';
-  var FILE = 'palaver-app.html';
-  var FALLBACK_URL = 'https://cdn.jsdelivr.net/gh/' + REPO + '@main/' + FILE;
-  var statusEl = document.getElementById('boot-status');
-
-  function renderApp(html) {
-    var iframe = document.createElement('iframe');
-    iframe.title = 'Palaver — offline AI chat';
-    iframe.setAttribute('allow', 'clipboard-read; clipboard-write');
-    iframe.srcdoc = html;
-    document.body.innerHTML = '';
-    document.body.appendChild(iframe);
-  }
-
-  function loadFrom(url) {
-    return fetch(url, { cache: 'no-store' }).then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url);
-      return res.text();
-    });
-  }
-
-  fetch('https://api.github.com/repos/' + REPO + '/commits/main', { cache: 'no-store' })
-    .then(function (res) {
-      if (!res.ok) throw new Error('GitHub API HTTP ' + res.status);
-      return res.json();
-    })
-    .then(function (commit) {
-      var sha = commit.sha;
-      if (!sha) throw new Error('no sha in GitHub API response');
-      var pinnedUrl = 'https://cdn.jsdelivr.net/gh/' + REPO + '@' + sha + '/' + FILE;
-      return loadFrom(pinnedUrl);
-    })
-    .catch(function (err) {
-      console.warn('Falling back to @main (could not resolve commit pin):', err);
-      return loadFrom(FALLBACK_URL);
-    })
-    .then(renderApp)
-    .catch(function (err) {
-      statusEl.textContent = 'Failed to load Palaver: ' + err.message +
-        '\n\nDirect link: ' + FALLBACK_URL;
-    });
+(function(){
+var REPO='Sm0keSkreen/Palaver',FILE='palaver-app.html',
+FB='https://cdn.jsdelivr.net/gh/'+REPO+'@main/'+FILE,
+el=document.getElementById('boot-status');
+function render(h){var f=document.createElement('iframe');f.title='Palaver \u2014 offline AI chat';f.setAttribute('allow','clipboard-read; clipboard-write');f.srcdoc=h;document.body.innerHTML='';document.body.appendChild(f)}
+function load(u){return fetch(u,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text()})}
+fetch('https://api.github.com/repos/'+REPO+'/commits/main',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('GitHub API '+r.status);return r.json()}).then(function(c){if(!c.sha)throw new Error('no sha');return load('https://cdn.jsdelivr.net/gh/'+REPO+'@'+c.sha+'/'+FILE)}).catch(function(){return load(FB)}).then(render).catch(function(e){el.textContent='Failed to load Palaver: '+e.message+'\n\nDirect link: '+FB});
 })();
 </script>
 </body>
