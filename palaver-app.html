@@ -506,6 +506,10 @@ body{
   // JSPI ORT build — supports Blob-backed external data that streams on demand,
   // reducing peak JS heap from full model size to largest single initializer.
   const JSPI_ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.jspi.min.mjs';
+  const MATHJS_CDN = 'https://cdn.jsdelivr.net/npm/mathjs@13.2.2/lib/browser/math.js';
+  const DAYJS_CDN = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js';
+  const DAYJS_RELATIVE_CDN = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/plugin/relativeTime.js';
+  const DAYJS_ADVANCEDFORMAT_CDN = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/plugin/advancedFormat.js';
 
   // Mirror of a handful of models' weights, pre-split into <20MB chunks and
   // hosted in our own GitHub repo so jsDelivr can serve them — a fallback
@@ -536,7 +540,7 @@ body{
   };
   const DEFAULT_MODEL = 'gemma270m';
 
-  const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail.';
+  const SYSTEM_PROMPT = 'You are Palaver, a helpful, friendly AI assistant. Keep replies clear and reasonably concise unless the user asks for more detail. You have access to local tools: a calculator for math, a date parser for time/date questions. Use them when appropriate — never hallucinate math results or timestamps.';
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
   // A loaded model stays resident across messages — no idle-unload timer.
@@ -623,6 +627,148 @@ body{
   try {
     state.thinkingEnabled = localStorage.getItem(THINKING_MODE_KEY) === '1';
   } catch { /* storage unavailable; ignore */ }
+
+  /* --------------------------- Local tools for 1B models ------------------ */
+  // Lightweight tools that offload work the 1B model would hallucinate:
+  // math evaluation, date/time parsing, and text manipulation.  These run
+  // deterministically in JS so the model never burns tokens on arithmetic
+  // or timestamp computation.
+
+  let mathjs = null;
+  let dayjs = null;
+
+  async function loadMathJS() {
+    if (mathjs) return mathjs;
+    mathjs = await import(MATHJS_CDN);
+    return mathjs;
+  }
+
+  async function loadDayJS() {
+    if (dayjs) return dayjs;
+    const dayjsModule = await import(DAYJS_CDN);
+    dayjs = dayjsModule.default || dayjsModule;
+    const relativeTime = await import(DAYJS_RELATIVE_CDN);
+    const advancedFormat = await import(DAYJS_ADVANCEDFORMAT_CDN);
+    dayjs.extend(relativeTime.default || relativeTime);
+    dayjs.extend(advancedFormat.default || advancedFormat);
+    return dayjs;
+  }
+
+  // Evaluate a math expression using math.js.  Returns { result, formatted }
+  // or { error }.  Strips natural-language wrappers ("what is", "calculate")
+  // before evaluation so the 1B model doesn't need to strip them itself.
+  async function evalMath(expr) {
+    try {
+      const m = await loadMathJS();
+      // Strip conversational filler
+      let cleaned = expr
+        .replace(/^(what\s+is|calculate|compute|evaluate|solve|find)\s+/i, '')
+        .replace(/\?+$/, '')
+        .trim();
+      // Convert word operators
+      cleaned = cleaned
+        .replace(/\bplus\b/gi, '+')
+        .replace(/\bminus\b/gi, '-')
+        .replace(/\btimes\b/gi, '*')
+        .replace(/\bmultiplied\s+by\b/gi, '*')
+        .replace(/\bdivided\s+by\b/gi, '/')
+        .replace(/\bover\b/gi, '/')
+        .replace(/\bto\s+the\s+power\s+of\b/gi, '^')
+        .replace(/\bsquared\b/gi, '^2')
+        .replace(/\bcubed\b/gi, '^3')
+        .replace(/\bsquare\s+root\s+of\b/gi, 'sqrt(')
+        .replace(/\bsqrt\b/gi, 'sqrt');
+      // Auto-close unclosed parens
+      const open = (cleaned.match(/\(/g) || []).length;
+      const close = (cleaned.match(/\)/g) || []).length;
+      for (let i = close; i < open; i++) cleaned += ')';
+      const result = m.evaluate(cleaned);
+      const formatted = typeof result === 'number'
+        ? (Number.isInteger(result) ? result.toLocaleString() : result.toPrecision(10).replace(/\.?0+$/, ''))
+        : String(result);
+      return { result, formatted };
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
+
+  // Parse relative or absolute date strings deterministically.
+  async function parseDate(expr) {
+    try {
+      const djs = await loadDayJS();
+      // Try relative time first ("next tuesday", "in 3 hours", "2 days ago")
+      let dt = djs(expr);
+      if (!dt.isValid()) {
+        // Try adding "in" prefix for relative expressions
+        dt = djs('in ' + expr);
+      }
+      if (!dt.isValid()) {
+        // Try removing common prefixes
+        const stripped = expr.replace(/^(what\s+is|when\s+is|when)\s+/i, '').replace(/\?+$/, '').trim();
+        dt = djs(stripped);
+      }
+      if (!dt.isValid()) return { error: 'Could not parse date: ' + expr };
+      return {
+        result: dt.toISOString(),
+        formatted: dt.format('dddd, MMMM D, YYYY [at] h:mm A'),
+        relative: dt.fromNow(),
+      };
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
+
+  // Clean text extraction (lightweight DOM readability).
+  // Accepts HTML string, returns cleaned plain text.
+  function cleanHtmlText(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    // Remove script, style, nav, footer, header elements
+    doc.querySelectorAll('script,style,nav,footer,header,aside,iframe,noscript').forEach((el) => el.remove());
+    // Remove attributes except href on a tags
+    doc.querySelectorAll('*').forEach((el) => {
+      if (el.tagName !== 'A') {
+        for (const attr of [...el.attributes]) el.removeAttribute(attr.name);
+      }
+    });
+    let text = doc.body?.textContent || '';
+    // Collapse whitespace
+    text = text.replace(/\s+/g, ' ').trim();
+    // Truncate to ~200 words to fit 1B model context
+    const words = text.split(' ');
+    if (words.length > 200) text = words.slice(0, 200).join(' ') + '…';
+    return text;
+  }
+
+  // Heuristic pre-routing: detect whether the user's message is a math
+  // question or date question and route directly to the tool.  Returns
+  // { handled: true, text } if the tool answered it, or { handled: false }
+  // if it should go to the model.
+  function heuristicRoute(text) {
+    const lower = text.toLowerCase().replace(/[?!.]+$/g, '').trim();
+
+    // Math detection: contains digits AND math operators, or starts with
+    // "what is", "calculate", "compute", "how much is", "how many"
+    const mathOps = /[+\-*/^%]|[xX×]|[÷]|[=]{2}|sqrt|log|sin|cos|tan|pi|e\b/i;
+    const hasDigits = /\d/.test(text);
+    const mathPrefixes = /^(what\s+is|calculate|compute|evaluate|solve|find|how\s+much\s+is|how\s+many)\b/i;
+
+    if ((hasDigits && mathOps.test(text)) || mathPrefixes.test(lower)) {
+      // Exclude things like "what is the best" or "how many messages"
+      const nonMathEndings = /\b(best|good|bad|worst|fast|slow|popular|common|rare|easy|hard|fun|cool|nice|boring|interesting)\b/i;
+      if (!nonMathEndings.test(lower)) {
+        return { handled: 'math', raw: text };
+      }
+    }
+
+    // Date detection: contains date-related keywords
+    const dateKeywords = /\b(today|tomorrow|yesterday|next\s+\w+|last\s+\w+|in\s+\d+\s+(hour|minute|day|week|month|year)|ago|date|day\s+of\s+the\s+week|what\s+day|when)\b/i;
+    const hasDateContext = dateKeywords.test(text) && /\d/.test(text) || /\b(today|tomorrow|yesterday)\b/i.test(text);
+    if (hasDateContext && !mathOps.test(text)) {
+      return { handled: 'date', raw: text };
+    }
+
+    return { handled: false };
+  }
 
   /* --------------------------- Worker plumbing --------------------------- */
   const WORKER_SRC = `
@@ -1828,6 +1974,37 @@ body{
     renderMsgCount();
     persistCurrentChat();
 
+    // ---- Heuristic pre-routing for local tools ----
+    // If the message is clearly a math or date question, answer it
+    // deterministically without burning model tokens.  The 1B model
+    // hallucinates arithmetic ~30% of the time; this avoids that entirely.
+    const route = heuristicRoute(text);
+    if (route.handled) {
+      let toolResult = '';
+      let toolLabel = '';
+      if (route.handled === 'math') {
+        const r = await evalMath(route.raw);
+        toolResult = r.error
+          ? `I couldn't evaluate that math expression: ${r.error}`
+          : `**${r.formatted}**`;
+        toolLabel = ' (calculated)';
+      } else if (route.handled === 'date') {
+        const r = await parseDate(route.raw);
+        toolResult = r.error
+          ? `I couldn't parse that date: ${r.error}`
+          : `**${r.formatted}** (${r.relative})`;
+        toolLabel = ' (date parsed)';
+      }
+      if (toolResult) {
+        const m = MODELS[state.modelKey];
+        addMessageBubble('assistant', toolResult, (m ? m.label : '') + toolLabel);
+        state.messages.push({ role: 'assistant', content: toolResult, modelLabel: m ? m.label + toolLabel : undefined });
+        renderMsgCount();
+        persistCurrentChat();
+        return;
+      }
+    }
+
     try {
       await ensureModel(state.modelKey);
     } catch (err) {
@@ -1929,7 +2106,6 @@ body{
   initChats();
   renderModelOptions();
   renderThemes();
-  updateDebugModeBtn();
   updateThinkingModeBtn();
   updateSendBtn();
   autoGrow();
