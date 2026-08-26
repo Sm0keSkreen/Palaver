@@ -787,6 +787,34 @@ body{
       }).blob();
     }
 
+    // JSPI ORT sessions return tensors from a separate WASM instance that
+    // fails transformers.js's isONNXTensor() check (instanceof against the
+    // bundled asyncify ORT's Tensor class).  This wrapper intercepts .run()
+    // and re-creates each output tensor using the standard ORT's Tensor
+    // constructor so that replaceTensors() and validateInputs() accept them.
+    function wrapJspiSession(session) {
+      const origRun = session.run.bind(session);
+      session.run = async function(feeds) {
+        const output = await origRun(feeds);
+        // Access the standard ORT Tensor class via the global symbol that
+        // transformers.js registered at import time.
+        const stdOrt = globalThis[Symbol.for('onnxruntime')];
+        const StdTensor = stdOrt && stdOrt.Tensor;
+        if (!StdTensor) return output;
+        const wrapped = {};
+        for (const [key, val] of Object.entries(output)) {
+          if (val && typeof val === 'object' && typeof val.type === 'string' && val.dims) {
+            wrapped[key] = new StdTensor(val.type, val.data, val.dims);
+            if (val.location) wrapped[key].location = val.location;
+          } else {
+            wrapped[key] = val;
+          }
+        }
+        return wrapped;
+      };
+      return session;
+    }
+
     // Create an ORT InferenceSession using the JSPI build, with the ONNX graph
     // as a small ArrayBuffer and external data backed by a disk-backed Blob.
     async function createSessionWithBlobData(graphUrl, dataUrl, dataFileName, sessionName, execProviders, onProgress) {
@@ -808,40 +836,26 @@ body{
         }
       }
 
-      const session = await jspiOrt.InferenceSession.create(graphBuf, {
+      let session = await jspiOrt.InferenceSession.create(graphBuf, {
         executionProviders: execProviders,
         logSeverityLevel: 3,
         externalData,
       });
       session.config = { dtype: 'q4f16', device: execProviders[0] === 'webgpu' ? 'webgpu' : 'wasm' };
-      return session;
+      return wrapJspiSession(session);
     }
 
     async function loadPipeline(modelId, dtype, device, cdnFolder, task, onProgress) {
       if (!transformersMod) {
-        // Load JSPI ORT first and register it as the global ONNX Runtime.
-        // transformers.js checks globalThis[Symbol.for('onnxruntime')] at
-        // import time — if set, it uses that ORT instance for ALL session
-        // creation and inference.  This avoids the dual-ORT problem where
-        // JSPI sessions return tensors that the bundled asyncify ORT's
-        // isONNXTensor() check doesn't recognize, causing "missing inputs"
-        // errors during forward passes.
-        jspiOrt = await import(${JSON.stringify(JSPI_ORT_CDN)});
-        // Point WASM files at the JSPI builds before transformers.js gets
-        // a chance to set them to the asyncify builds (the env check
-        // skips the overwrite if wasmPaths is already set).
-        const jspiWasmBase = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/';
-        jspiOrt.env.wasm.wasmPaths = {
-          mjs:  jspiWasmBase + 'ort-wasm-simd-threaded.jspi.mjs',
-          wasm: jspiWasmBase + 'ort-wasm-simd-threaded.jspi.wasm',
-        };
-        jspiOrt.env.wasm.numThreads = 1;
-        jspiOrt.env.wasm.wasmMemory = { initial: 6144, maximum: 65536, growth: true };
-        globalThis[Symbol.for('onnxruntime')] = jspiOrt;
-
+        // Pre-register the standard ORT as the global ONNX Runtime so
+        // transformers.js uses it for all sessions and tensor checks.
+        // We import the same version transformers.js bundles (1.26.0-dev)
+        // so the Tensor class matches what isONNXTensor() checks against.
+        if (!globalThis[Symbol.for('onnxruntime')]) {
+          const stdOrt = await import('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0-dev.20260416-b7804b056c/dist/ort.min.mjs');
+          globalThis[Symbol.for('onnxruntime')] = stdOrt;
+        }
         transformersMod = await import(${JSON.stringify(TRANSFORMERS_CDN)});
-        // Apply additional WASM limits through transformers.js env (which
-        // now wraps the JSPI ORT env).
         transformersMod.env.backends.onnx.wasm.numThreads = 1;
         transformersMod.env.backends.onnx.wasm.wasmMemory = {
           initial: 6144,
@@ -873,7 +887,19 @@ body{
           transformersMod.AutoConfig.from_pretrained(pipelineModelId),
         ]);
 
-        // JSPI ORT is already loaded as the global ORT (see loadPipeline init).
+        // JSPI ORT is a separate WASM instance used only for session
+        // creation with Blob-backed external data.  We MUST NOT set it as
+        // the global ORT because its WASM build is missing kernels (e.g.
+        // GatherBlockQuantized) that the standard asyncify build has.
+        // Instead, we wrap each JSPI session's .run() to convert output
+        // tensors into objects that transformers.js's isONNXTensor() and
+        // Tensor constructor recognize.
+        if (!jspiOrt) {
+          jspiOrt = await import(${JSON.stringify(JSPI_ORT_CDN)});
+          jspiOrt.env.wasm.numThreads = 1;
+          jspiOrt.env.wasm.wasmMemory = { initial: 6144, maximum: 65536, growth: true };
+        }
+
         // Determine execution providers
         const execProviders = device === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm'];
 
