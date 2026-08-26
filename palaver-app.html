@@ -1027,7 +1027,7 @@ body{
   const pendingGen = new Map(); // reqId -> { resolve, reject, onChunk }
 
   function makeWorker() {
-    const w = new Worker('ai-worker.js', { type: 'module' });
+    const w = new Worker('https://cdn.jsdelivr.net/gh/Sm0keSkreen/Palaver@main/ai-worker.js', { type: 'module' });
     w.onmessage = onWorkerMessage;
     w.onerror = (err) => {
       console.error('AI worker error:', err);
