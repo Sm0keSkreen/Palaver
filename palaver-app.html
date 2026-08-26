@@ -505,7 +505,6 @@ body{
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/mathjs@13.2.2/lib/browser/math.js"></script>
 <script>
 /* Palaver: an offline AI chat. Every model runs entirely on-device via
    transformers.js , nothing you type ever leaves the browser. Model
@@ -658,6 +657,13 @@ body{
 
   async function loadMathJS() {
     if (mathjs) return mathjs;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = MATHJS_CDN;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load math.js'));
+      document.head.appendChild(s);
+    });
     mathjs = math;
     return mathjs;
   }
