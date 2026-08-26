@@ -268,7 +268,7 @@ body{
 .dropdown-panel .row:last-child{margin-bottom:0;}
 .dropdown-panel .label{font-weight:600;font-size:11.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;}
 .model-panel{max-height:min(70vh,520px);overflow-y:auto;}
-.debug-hint{font-size:10.5px;color:var(--text-dim);line-height:1.4;margin-top:2px;}
+
 
 .theme-swatch{
   width:26px;height:26px;border-radius:50%;cursor:pointer;
@@ -466,12 +466,7 @@ body{
           <div class="row">
             <button class="btn small" id="thinkingModeBtn">Thinking mode: Off</button>
           </div>
-          <div class="debug-hint">Only Gemma 4 E2B supports this — lets it reason before answering, which can help on harder questions but makes every reply slower. No effect on Gemma 270M/1B.</div>
-          <div class="label">Debug</div>
-          <div class="row">
-            <button class="btn small" id="debugModeBtn">Debug mode: Off</button>
-          </div>
-          <div class="debug-hint">Shows the real error text (from the browser console) in chat and status messages instead of a generic failure message.</div>
+
         </div>
       </div>
     </header>
@@ -567,7 +562,6 @@ body{
   const settingsPanel = $('#settingsPanel');
   const themeRow = $('#themeRow');
   const deleteAllChatsBtn = $('#deleteAllChatsBtn');
-  const debugModeBtn = $('#debugModeBtn');
   const thinkingModeBtn = $('#thinkingModeBtn');
   const sidebar = $('#sidebar');
   const sidebarCollapseBtn = $('#sidebarCollapseBtn');
@@ -586,7 +580,6 @@ body{
   const SKIP_KEY_PREFIX = 'palaver-ai-skip-';
   const SKIP_REASON_KEY_PREFIX = 'palaver-ai-skip-reason-';
   const CHATS_KEY = 'palaver-chats-v1';
-  const DEBUG_MODE_KEY = 'palaver-debug-mode';
   const THINKING_MODE_KEY = 'palaver-thinking-mode';
 
   const state = {
@@ -607,8 +600,7 @@ body{
     genStartedAt: null,
     messages: [],           // {role:'user'|'assistant', content, modelLabel?}
     stopRequested: false,
-    debugMode: false,       // when on, show real error text instead of a generic message
-    thinkingEnabled: false, // Gemma 4 E2B only — lets it reason before answering; ignored by other models
+    thinkingEnabled: false, // lets model reason before answering; ignored if model doesn't support it
   };
 
   try {
@@ -626,10 +618,6 @@ body{
       const firstOk = Object.keys(MODELS).find((k) => !state.unavailable[k]);
       if (firstOk) state.modelKey = firstOk;
     }
-  } catch { /* storage unavailable; ignore */ }
-
-  try {
-    state.debugMode = localStorage.getItem(DEBUG_MODE_KEY) === '1';
   } catch { /* storage unavailable; ignore */ }
 
   try {
@@ -1019,7 +1007,13 @@ body{
               self.postMessage({ type: 'genChunk', reqId, text: chunk });
             },
           });
-          const result = await pipe(messages, Object.assign({}, genOpts, { streamer }));
+          const thinking = !!genOpts.thinking;
+          const wireMessages = thinking
+            ? messages.map((m, idx) => (idx === 0 && m.role === 'system')
+              ? { role: m.role, content: '<|think|>\\n' + m.content }
+              : m)
+            : messages;
+          const result = await pipe(wireMessages, Object.assign({}, genOpts, { streamer }));
           let text = result && result[0] && result[0].generated_text;
           if (Array.isArray(text)) text = (text[text.length - 1] && text[text.length - 1].content) || '';
           self.postMessage({ type: 'genDone', reqId, text });
@@ -1730,17 +1724,6 @@ body{
     deleteAllChats();
   });
 
-  function updateDebugModeBtn() {
-    debugModeBtn.textContent = 'Debug mode: ' + (state.debugMode ? 'On' : 'Off');
-    debugModeBtn.classList.toggle('primary', state.debugMode);
-  }
-  debugModeBtn.addEventListener('click', () => {
-    state.debugMode = !state.debugMode;
-    try { localStorage.setItem(DEBUG_MODE_KEY, state.debugMode ? '1' : '0'); } catch { /* ignore */ }
-    updateDebugModeBtn();
-    updateSendBtn();
-  });
-
   function updateThinkingModeBtn() {
     thinkingModeBtn.textContent = 'Thinking mode: ' + (state.thinkingEnabled ? 'On' : 'Off');
     thinkingModeBtn.classList.toggle('primary', state.thinkingEnabled);
@@ -1870,7 +1853,7 @@ body{
     // so it still displays/collapses correctly when revisited, but only the
     // answer portion goes out over the wire. splitThinking() is a no-op for
     // any message that never had a thinking block, so this is safe for
-    // every other model too.
+    // every model.
     const wireMessages = alternateMessages([
       { role: 'system', content: SYSTEM_PROMPT },
       ...buildContextMessages(state.messages).map((m) => ({
@@ -1878,9 +1861,8 @@ body{
         content: m.role === 'assistant' ? (splitThinking(m.content).answer || m.content) : m.content,
       })),
     ]);
-    // thinking is only ever read by the worker's Gemma-4-specific branch —
-    // every other model ignores it, so it's safe to include unconditionally
-    // here rather than needing to know which model is selected.
+    // thinking is read by the worker for all models —
+    // safe to include unconditionally here.
     const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true, thinking: state.thinkingEnabled };
 
     state.generating = true;
@@ -1919,7 +1901,7 @@ body{
       if (!state.stopRequested) {
         cursor.remove();
         console.error(err);
-        const detail = (state.debugMode && err && err.message) ? ` (${err.message})` : '';
+        const detail = (err && err.message) ? ` (${err.message})` : '';
         setBubbleContent(wrap._bubble, 'assistant', acc ? acc + '\n\n[generation failed' + detail + ']' : 'Something went wrong generating a reply.' + detail);
         // Same reason as stopGenerating(): the user's turn was already
         // pushed to state.messages before generation started, and every
