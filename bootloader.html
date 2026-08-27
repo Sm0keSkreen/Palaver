@@ -17,7 +17,7 @@ iframe{display:block;width:100%;height:100%;border:0}
 var REPO='Sm0keSkreen/Palaver',FILE='palaver-app.html',
 FB='https://cdn.jsdelivr.net/gh/'+REPO+'@main/'+FILE,
 el=document.getElementById('boot-status');
-function render(h){var f=document.createElement('iframe');f.title='Palaver \u2014 offline AI chat';f.setAttribute('allow','clipboard-read; clipboard-write');f.srcdoc=h;document.body.innerHTML='';document.body.appendChild(f)}
+function render(h){var f=document.createElement('iframe');f.title='Palaver \u002C offline AI chat';f.setAttribute('allow','clipboard-read; clipboard-write');f.srcdoc=h;document.body.innerHTML='';document.body.appendChild(f)}
 function load(u){return fetch(u,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text()})}
 fetch('https://api.github.com/repos/'+REPO+'/commits/main',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('GitHub API '+r.status);return r.json()}).then(function(c){if(!c.sha)throw new Error('no sha');return load('https://cdn.jsdelivr.net/gh/'+REPO+'@'+c.sha+'/'+FILE)}).catch(function(){return load(FB)}).then(render).catch(function(e){el.textContent='Failed to load Palaver: '+e.message+'\n\nDirect link: '+FB});
 })();

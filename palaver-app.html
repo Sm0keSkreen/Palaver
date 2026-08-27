@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Palaver , offline AI chat</title>
+<title>Palaver, offline AI chat</title>
 <style>
 :root{
-  /* Midnight (default): deep navy, monochrome blue , same palette as Emend */
+  /* Midnight (default): deep navy, monochrome blue, same palette as Emend */
   --bg:#080b11;
   --panel:#0d121a;
   --panel-2:#111826;
@@ -277,6 +277,25 @@ body{
 }
 .theme-swatch.selected{border-color:var(--accent);}
 
+.accent-swatch{
+  width:22px;height:22px;border-radius:50%;cursor:pointer;
+  border:2px solid var(--border);background:var(--sw-accent);
+  flex-shrink:0;
+}
+.accent-swatch.selected{border-color:var(--text);box-shadow:0 0 0 1px var(--text);}
+.accent-picker{
+  width:22px;height:22px;border:none;padding:0;background:transparent;cursor:pointer;
+  border-radius:50%;flex-shrink:0;overflow:hidden;
+}
+.accent-picker::-webkit-color-swatch-wrapper{padding:0;}
+.accent-picker::-webkit-color-swatch{border:2px solid var(--border);border-radius:50%;}
+.accent-picker::-moz-color-swatch{border:2px solid var(--border);border-radius:50%;}
+.accent-reset{
+  font-size:11px;color:var(--text-dim);cursor:pointer;padding:2px 6px;
+  border-radius:5px;border:1px solid var(--border);background:transparent;
+}
+.accent-reset:hover{background:var(--panel-2);color:var(--text);}
+
 .chip{
   border:1px solid var(--border);
   background:var(--panel-2);
@@ -466,6 +485,8 @@ body{
         <div class="dropdown-panel settings-panel" id="settingsPanel">
           <div class="label">Theme</div>
           <div class="row" id="themeRow"></div>
+          <div class="label">Accent color</div>
+          <div class="row" id="accentRow" style="align-items:center"></div>
           <div class="label">Chats</div>
           <div class="row">
             <button class="btn small danger" id="deleteAllChatsBtn">Delete all chats</button>
@@ -474,6 +495,15 @@ body{
           <div class="row">
             <button class="btn small" id="thinkingModeBtn">Thinking mode: Off</button>
           </div>
+          <div class="label">Custom instructions</div>
+          <div class="row" style="flex-direction:column;width:100%">
+            <textarea id="customInstructionsInput" rows="3" placeholder="Tell the AI what to change…" style="width:100%;resize:vertical;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font:inherit;font-size:12px;line-height:1.4"></textarea>
+            <div style="display:flex;gap:6px;align-self:flex-end;margin-top:4px">
+              <button class="btn small" id="saveCustomInstructionsBtn">Save</button>
+              <button class="btn small danger" id="clearCustomInstructionsBtn">Clear</button>
+            </div>
+          </div>
+
           <div class="label">System prompt</div>
           <div class="row" style="flex-direction:column;width:100%">
             <textarea id="systemPromptInput" rows="3" style="width:100%;resize:vertical;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font:inherit;font-size:12px;line-height:1.4"></textarea>
@@ -506,45 +536,34 @@ body{
 </div>
 
 <script>
-/* Palaver: an offline AI chat. Every model runs entirely on-device via
-   transformers.js , nothing you type ever leaves the browser. Model
-   download and text generation both happen inside a dedicated Web Worker
-   (same approach as Emend's AI Check), so the page stays responsive and can
-   show live progress instead of freezing while the WASM/WebGPU backend does
-   its (synchronous-feeling) heavy lifting. */
+/* Palaver: an offline AI chat. Models run on-device via transformers.js,
+   nothing you type ever leaves the browser. Download + generation happen
+   inside a dedicated Web Worker so the page stays responsive. */
 (() => {
   'use strict';
 
   const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-  // JSPI ORT build , supports Blob-backed external data that streams on demand,
-  // reducing peak JS heap from full model size to largest single initializer.
+  // JSPI ORT build with Blob-backed external data streaming, keeps peak JS heap
+  // near one chunk instead of the full model size.
   const JSPI_ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.jspi.min.mjs';
   const MATHJS_CDN = 'https://cdn.jsdelivr.net/npm/mathjs@13.2.2/lib/browser/math.js';
   const DAYJS_CDN = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js';
   const DAYJS_RELATIVE_CDN = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/plugin/relativeTime.js';
   const DAYJS_ADVANCEDFORMAT_CDN = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/plugin/advancedFormat.js';
 
-  // Mirror of a handful of models' weights, pre-split into <20MB chunks and
-  // hosted in our own GitHub repo so jsDelivr can serve them , a fallback
-  // path for anyone who can't reach huggingface.co directly. Only models
-  // listed here (via `cdnFolder`) use it; everything else loads from HF
-  // exactly as before. See palaver-models repo's onnx/*.manifest.json for
-  // the chunk lists this depends on.
+  // Mirror of model weights pre-split into <20MB chunks in our own GitHub repo,
+  // a fallback for anyone who can't reach huggingface.co directly. Models listed
+  // here (via cdnFolder) use it; everything else loads from HF as normal.
   const CDN_REPO = 'https://cdn.jsdelivr.net/gh/Sm0keSkreen/palaver-models@main/';
 
   const MODELS = {
-    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX', label: 'Gemma 270M', meta: '~320MB · Google, ultra-light',     dtype: 'q4', cdnFolder: 'gemma270m' },
+    gemma270m: { id: 'onnx-community/gemma-3-270m-it-ONNX', label: 'Gemma 270M', meta: '~320MB · Google, light',     dtype: 'q4', cdnFolder: 'gemma270m' },
     gemma1b:   { id: 'onnx-community/gemma-3-1b-it-ONNX',   label: 'Gemma 1B',   meta: '~860MB · Google, newer arch',      dtype: 'q4', cdnFolder: 'gemma1b' },
-    // Gemma 4's smallest tier. It's multimodal under the hood (vision +
-    // audio encoders are part of every download, even though this app only
-    // ever sends text) and uses very large per-layer embedding tables, so
-    // despite the "2B effective params" name the real download is ~3.4GB ,
-    // several times heavier than Gemma 1B above, and in the same size class
-    // as models that can fail to load at all on lower-memory devices. It
-    // also doesn't fit transformers.js's normal pipeline() helper: it needs
-    // its own processor/model classes and a different message shape, which
-    // is why it carries the `task` field below (see loadPipeline/generate
-    // in WORKER_SRC for the branch this triggers).
+    // Gemma 4's smallest tier. Multimodal under the hood (vision + audio
+    // encoders always download even though this app only sends text), ~3.4GB.
+    // Needs its own processor/model classes and a different message shape,
+    // which is what the `task` field triggers (see loadPipeline/generate
+    // in WORKER_SRC).
     gemma4e2b: {
       id: 'onnx-community/gemma-4-E2B-it-ONNX', label: 'Gemma 4 E2B',
       meta: '~3.4GB · Google, newest architecture, large download',
@@ -557,16 +576,20 @@ body{
   let userSystemPrompt = null;
   try { userSystemPrompt = localStorage.getItem(SYSTEM_PROMPT_KEY); } catch {}
 
+  const CUSTOM_INSTRUCTIONS_KEY = 'palaver-custom-instructions';
+  let customInstructions = null;
+  try { customInstructions = localStorage.getItem(CUSTOM_INSTRUCTIONS_KEY); } catch {}
+
   const SYSTEM_PROMPT_DEFAULT = 'You are Palaver, a helpful, friendly AI assistant running locally in the browser. Keep replies clear and concise unless asked for detail.';
-  function getSystemPrompt() { return userSystemPrompt || SYSTEM_PROMPT_DEFAULT; }
+  function getSystemPrompt() {
+    const base = userSystemPrompt || SYSTEM_PROMPT_DEFAULT;
+    return customInstructions ? customInstructions + '\n\n' + base : base;
+  }
   const MAX_NEW_TOKENS = 768;
   const MAX_INPUT_LENGTH = 8000;
-  // A loaded model stays resident across messages , no idle-unload timer.
-  // The only thing that discards a worker is ensureModel() loading a
-  // *different* model than whatever's currently resident (see "Keep at most
-  // one model resident at a time" below), so switching models is still the
-  // one thing that frees the previous model's memory; sending more messages
-  // to the same model never re-triggers a reload.
+  // A loaded model stays resident across messages, no idle-unload timer.
+  // Only loading a *different* model discards the previous one (see
+  // "Keep at most one model resident" below).
 
   const THEMES = [
     { id: 'midnight', label: 'Midnight', bg: '#080b11', accent: '#3e82f7' },
@@ -646,11 +669,9 @@ body{
     state.thinkingEnabled = localStorage.getItem(THINKING_MODE_KEY) === '1';
   } catch { /* storage unavailable; ignore */ }
 
-  /* --------------------------- Local tools for 1B models ------------------ */
-  // Lightweight tools that offload work the 1B model would hallucinate:
-  // math evaluation, date/time parsing, and text manipulation.  These run
-  // deterministically in JS so the model never burns tokens on arithmetic
-  // or timestamp computation.
+  /* ---- Local tools for 1B models ---- */
+  // Deterministic JS tools for math, date/time, and text work that the 1B
+  // model would otherwise hallucinate on.
 
   let mathjs = null;
   let dayjs = null;
@@ -679,9 +700,9 @@ body{
     return dayjs;
   }
 
-  // Evaluate a math expression using math.js.  Returns { result, formatted }
-  // or { error }.  Strips natural-language wrappers ("what is", "calculate")
-  // before evaluation so the 1B model doesn't need to strip them itself.
+  // Evaluate a math expression via math.js. Returns { result, formatted }
+  // or { error }. Strips natural-language wrappers ("what is", "calculate")
+  // so the 1B model doesn't need to.
   async function evalMath(expr) {
     try {
       const m = await loadMathJS();
@@ -743,7 +764,7 @@ body{
     }
   }
 
-  // Clean text extraction (lightweight DOM readability).
+  // Clean text extraction (DOM readability).
   // Accepts HTML string, returns cleaned plain text.
   function cleanHtmlText(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -764,10 +785,8 @@ body{
     return text;
   }
 
-  // Heuristic pre-routing: detect whether the user's message is a math
-  // question or date question and route directly to the tool.  Returns
-  // { handled: true, text } if the tool answered it, or { handled: false }
-  // if it should go to the model.
+  // Heuristic pre-routing: detect math/date questions and route to the tool.
+  // Returns { handled, raw } if a tool answered it, or { handled: false }.
   function heuristicRoute(text) {
     const lower = text.toLowerCase().replace(/[?!.]+$/g, '').trim();
 
@@ -1060,7 +1079,7 @@ body{
     }
 
     // Model weight URLs always look like ".../onnx/<name>.onnx" or
-    // ".../onnx/<name>.onnx_data[_N]" , the only files that are ever split
+    // ".../onnx/<name>.onnx_data[_N]", the only files that are ever split
     // into chunks in the CDN mirror. Everything else (tokenizer.json,
     // config.json, etc.) is a normal single small file.
     function looksLikeModelWeightFile(url) {
@@ -1078,7 +1097,7 @@ body{
     // Storage bucket. For a chunked weight file (recognized by a sibling
     // "<file>.manifest.json"), it lazily fetches each chunk, verifies its
     // SHA-256 against the manifest, and streams the bytes back so
-    // transformers.js's own download-progress UI keeps working , then
+    // transformers.js's own download-progress UI keeps working, then
     // stashes the fully-assembled file in the real cache in the background
     // so the next load of the same model is instant.
     function getJsDelivrCache() {
@@ -1099,7 +1118,7 @@ body{
           let manifest;
           try {
             const mRes = await fetch(key + '.manifest.json');
-            if (!mRes.ok) return undefined; // not a chunked file , fall through to a normal fetch
+            if (!mRes.ok) return undefined; // not a chunked file, fall through to a normal fetch
             manifest = await mRes.json();
           } catch {
             return undefined;
@@ -1109,7 +1128,7 @@ body{
           // assembled blob in Cache API for instant offline reloads. For
           // larger files (Gemma 4 E2B is ~3.4GB), accumulating every chunk
           // into a second buffer while the ONNX runtime is also loading
-          // them causes peak memory to blow the tab , so the stream passes
+          // them causes peak memory to blow the tab, so the stream passes
           // through directly without buffering, and we skip the cache write.
           const LARGE_FILE_THRESHOLD = 200 * 1024 * 1024;
           const shouldCollect = manifest.totalSize <= LARGE_FILE_THRESHOLD;
@@ -1127,7 +1146,7 @@ body{
                       await cacheToStore.put(key, new Response(fullBlob, {
                         headers: { 'content-length': String(manifest.totalSize), 'content-type': 'application/octet-stream' },
                       }));
-                    } catch { /* best-effort caching only */ }
+                    } catch { /* ignore cache errors */ }
                   });
                 }
                 return;
@@ -1153,7 +1172,7 @@ body{
         async put(key, response) {
           const realCache = await realCachePromise;
           if (!realCache) return;
-          try { await realCache.put(key, response); } catch { /* best-effort caching only */ }
+          try { await realCache.put(key, response); } catch { /* ignore cache errors */ }
         },
       };
       return jsDelivrCache;
@@ -1166,7 +1185,7 @@ body{
     // Create a disk-backed Blob from a chunked file.  Each 18 MB part is
     // downloaded, verified, and enqueued into a ReadableStream.  The stream
     // is consumed by Response.blob(), which on modern Chrome stores the
-    // result on disk , keeping peak JS heap at ~18 MB (one chunk at a time)
+    // result on disk, keeping peak JS heap at ~18 MB (one chunk at a time)
     // instead of the full file size.  ORT's JSPI async loader then reads
     // byte ranges from this Blob on demand during session creation.
     async function makeChunkedBlob(manifest, baseUrl, onProgress, fileName) {
@@ -1271,24 +1290,19 @@ body{
         transformersMod.env.useCustomCache = false;
         transformersMod.env.customCache = null;
       }
-      // Gemma 4 is a multimodal any-to-any model , transformers.js has no
-      // pipeline('text-generation', ...) support for it, so it's loaded via
-      // its own processor + model classes instead (mirrors the model
-      // card's documented Transformers.js usage exactly).
-      if (task === 'gemma4') {
-        // Load processor and config via transformers.js (lightweight)
-        const [processor, config] = await Promise.all([
+    // Gemini 4 uses its own processor+model classes instead of pipeline(),
+    // no external data materialization via transformers.js.
+    if (task === 'gemma4') {
+      const [processor, config] = await Promise.all([
           transformersMod.AutoProcessor.from_pretrained(pipelineModelId),
           transformersMod.AutoConfig.from_pretrained(pipelineModelId),
         ]);
 
-        // JSPI ORT is a separate WASM instance used only for session
-        // creation with Blob-backed external data.  We MUST NOT set it as
-        // the global ORT because its WASM build is missing kernels (e.g.
-        // GatherBlockQuantized) that the standard asyncify build has.
-        // Instead, we wrap each JSPI session's .run() to convert output
-        // tensors into objects that transformers.js's isONNXTensor() and
-        // Tensor constructor recognize.
+        // JSPI ORT is a separate WASM instance for session creation with
+        // Blob-backed external data.  Do NOT set it as the global ORT: its
+        // WASM build is missing kernels (e.g. GatherBlockQuantized) that the
+        // standard asyncify build has.  Instead, wrap each session's .run()
+        // to convert output tensors into objects transformers.js recognizes.
         if (!jspiOrt) {
           jspiOrt = await import(${JSON.stringify(JSPI_ORT_CDN)});
           jspiOrt.env.wasm.numThreads = 1;
@@ -1314,7 +1328,7 @@ body{
           sessions[name] = await createSessionWithBlobData(graphUrl, dataUrl, def.dataFile, name, execProviders, onProgress);
         }
 
-        // Build the model from config + our sessions (skips transformers.js
+        // Build model from config + our sessions (skips transformers.js
         // session loading which would materialize all external data as Uint8Array)
         const model = new transformersMod.Gemma4ForConditionalGeneration(config, sessions, { generation_config: {} });
         return { isGemma4: true, processor, model };
@@ -1362,18 +1376,14 @@ body{
           const pipe = pipelines[key];
           if (!pipe) throw new Error('model not loaded: ' + key);
           if (pipe.isGemma4) {
-            // Gemma 4's own model card shows message content as an array of
-            // typed parts ({ type: 'text', text: ... }), but that shape
-            // actually throws inside this model's chat template ("Unknown
-            // ArrayValue filter: trim") , live-tested against the real
-            // processor before shipping this. Plain string content (the
-            // same shape every other model in this app already uses) works
-            // correctly, so messages are passed through unchanged.
+            // Gemma 4 model card shows content as an array of typed parts
+            // ({ type: 'text', text: ... }), but that throws inside the chat
+            // template ("Unknown ArrayValue filter: trim").  Plain string
+            // content (the same shape every other model uses) works, so
+            // messages pass through unchanged.
             const { processor, model } = pipe;
-            // Gemma 4's docs: thinking is triggered by putting a literal
-            // "<|think|>" token at the start of the system prompt, plus
-            // passing enable_thinking to the template , both are needed,
-            // one alone isn't enough per the model card.
+            // Gemma 4 thinking: prepend "<|think|>" token in system prompt
+            // AND pass enable_thinking to the template; both are required.
             const thinking = !!genOpts.thinking;
             const chatMessages = thinking
               ? messages.map((m, idx) => (idx === 0 && m.role === 'system')
@@ -1393,12 +1403,10 @@ body{
               },
             });
             // Google's documented sampling defaults for Gemma 4, not this
-            // app's usual temperature/top_p , do_sample still comes from
-            // genOpts so Stop behaves the same as other models. max_new_tokens
-            // gets a bigger floor when thinking is on: the reasoning trace
-            // itself consumes part of that budget, and without headroom a
-            // long thought could eat the whole thing and leave no tokens
-            // left for the actual answer.
+            // app's usual temperature/top_p.  do_sample comes from genOpts
+            // so Stop behaves the same as other models.  Bigger floor on
+            // max_new_tokens when thinking is on so the reasoning trace
+            // doesn't eat the entire budget.
             const outputs = await model.generate({
               ...inputs,
               max_new_tokens: thinking ? Math.max(genOpts.max_new_tokens, 1536) : genOpts.max_new_tokens,
@@ -1452,10 +1460,9 @@ body{
     w.onerror = (err) => {
       console.error('AI worker error:', err);
       const message = (err && (err.message || String(err))) || 'Unknown worker error';
-      // This top-level handler fires for errors that never made it through
-      // the normal postMessage-based load/generate error paths (a crash in
-      // the worker script itself, for example), so there's no `key` on the
-      // event , attribute it to whichever model was actively loading, if any.
+      // Errors that crash the worker script itself never make it through
+      // the normal postMessage load/generate error paths. Attribute to the
+      // model that was actively loading, if any.
       if (state.loading) state.loadErrorMessages[state.loading] = message;
     };
     return w;
@@ -1489,11 +1496,9 @@ body{
     delete loadResolvers[key];
     if (errMessage) {
       state.loadErrorMessages[key] = errMessage;
-      // A model can fail outright on a device whose real memory is smaller
-      // than the model needs. A failed WASM allocation leaves
-      // onnxruntime-web's memory maxed out (WebAssembly.Memory can grow but
-      // never shrink), so trying anything else in that SAME worker would
-      // fail identically. Ditch the poisoned worker for a fresh one.
+      // A failed WASM allocation leaves onnxruntime-web's memory maxed out
+      // (WebAssembly.Memory can grow but never shrink), so anything else in
+      // the same worker would fail identically.  Terminate and start fresh.
       console.warn(`Model "${key}" failed to load; marking unavailable:`, errMessage);
       state.unavailable[key] = true;
       try {
@@ -1528,11 +1533,9 @@ body{
     if (state.pipelinesReady[key]) return Promise.resolve();
     if (state.loadPromises[key]) return state.loadPromises[key];
 
-    // Keep at most one model resident at a time. Every pipeline that loads
-    // successfully stays in the worker's memory until the worker is
-    // discarded , loading a second model on top of an already-loaded one
-    // is exactly what pushes total WASM/GPU memory over a device's ceiling.
-    // Free whatever's currently loaded before pulling in a different model.
+    // Keep at most one model resident at a time.  Loading a second model on
+    // top of an already-loaded one pushes total WASM/GPU memory over the
+    // device's ceiling.  Free whatever's loaded before pulling in a new model.
     const otherResident = Object.keys(state.pipelinesReady).find((k) => state.pipelinesReady[k] && k !== key);
     if (otherResident) {
       Object.keys(loadResolvers).forEach((k) => {
@@ -1562,15 +1565,10 @@ body{
     return tracked;
   }
 
-  // Defense in depth against the strict-alternation requirement above: even
-  // after the fixes to ensureModel()'s catch, stopGenerating(), and
-  // doSend()'s catch, a chat that was already broken before this fix
-  // shipped (saved to localStorage with two consecutive same-role turns)
-  // would otherwise keep failing forever with no way to recover short of
-  // starting a new chat. Run this on the outgoing message list right before
-  // every send instead of trusting history to already be well-formed ,
-  // merging consecutive same-role turns together self-heals an already-
-  // broken chat, and costs nothing when history is already fine.
+  // Defense in depth against the strict-alternation requirement: a chat that
+  // was saved to localStorage with two consecutive same-role turns would keep
+  // failing forever.  Run this on every send to merge same-role turns and
+  // self-heal an already-broken chat.
   function alternateMessages(msgs) {
     const out = [];
     for (const m of msgs) {
@@ -1584,22 +1582,16 @@ body{
     return out;
   }
 
-  // Characters, not tokens , an exact count would need a real tokenizer call
-  // (done inside the worker, off this thread), and the same ~4 chars/token
-  // heuristic already used by estimateOutputTokens() above is close enough
-  // for a soft budget. Without a cap, a long-running chat would eventually
-  // just exceed a model's context window outright; well before that, more
-  // history means a bigger KV cache and slower generation on every turn ,
-  // a real cost on a memory-constrained device. ~12000 chars (~3000 tokens)
-  // is enough for a handful of back-and-forth turns while keeping that cost
-  // small; tune this constant if that trade-off should shift either way.
+  // Characters, not tokens, an exact count needs a real tokenizer call (done
+  // inside the worker).  ~4 chars/token heuristic, same as estimateOutputTokens.
+  // Without a cap, more history means a bigger KV cache and slower generation
+  // on every turn, a real cost on memory-constrained devices.  ~12000 chars
+  // (~3000 tokens) is enough for a handful of turns while keeping that cost
+  // small; tune if the trade-off shifts.
   const MAX_CONTEXT_CHARS = 12000;
 
-  // The full conversation stays in state.messages (and gets shown/saved as
-  // normal) , this only trims what actually gets sent to the model each
-  // turn, oldest messages first, and always keeps at least the most recent
-  // message so a very long single message still gets sent rather than
-  // dropped entirely.
+  // Trim what gets sent to the model each turn, oldest first, always keeping
+  // at least the most recent message so a long single message still gets sent.
   function buildContextMessages(messages) {
     let used = 0;
     const kept = [];
@@ -1632,10 +1624,8 @@ body{
         + (state.modelKey === key ? ' selected' : '')
         + (unavailable ? ' unavailable' : '');
       div.innerHTML = `<span class="name">${m.label}</span><span class="meta">${unavailable ? 'Unavailable on this device' : m.meta}</span>`;
-      // Set via property (not baked into the innerHTML string above) so an
-      // error message containing quotes or HTML-special characters can't
-      // break the markup , the title shows the real reason on hover instead
-      // of making you dig through Debug mode to find out why.
+      // Set via property (not baked into innerHTML) so an error message
+      // containing quotes or HTML-special characters can't break the markup.
       if (unavailable && state.loadErrorMessages[key]) div.title = state.loadErrorMessages[key];
       div.addEventListener('click', () => selectModel(key));
       modelList.appendChild(div);
@@ -1670,6 +1660,90 @@ body{
       });
       themeRow.appendChild(btn);
     });
+  }
+
+  const ACCENT_KEY = 'palaver-accent-color';
+  const ACCENT_PRESETS = [
+    { label: 'Blue',   color: '#3e82f7' },
+    { label: 'Purple', color: '#8b5cf6' },
+    { label: 'Teal',   color: '#14b8a6' },
+    { label: 'Green',  color: '#22c55e' },
+    { label: 'Orange', color: '#f97316' },
+    { label: 'Pink',   color: '#ec4899' },
+    { label: 'Gold',   color: '#eab308' },
+  ];
+
+  let customAccent = null;
+  try { customAccent = localStorage.getItem(ACCENT_KEY) || null; } catch {}
+
+  function accentFromHex(hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const darker = (v, f) => Math.max(0, Math.round(v * f));
+    const hover = `rgb(${darker(r, 0.82)},${darker(g, 0.82)},${darker(b, 0.82)})`;
+    const soft = `rgba(${r},${g},${b},.14)`;
+    return { accent: hex, hover, soft };
+  }
+
+  function applyAccentColor(hex) {
+    const root = document.documentElement;
+    if (!hex) {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-hover');
+      root.style.removeProperty('--accent-soft');
+    } else {
+      const { accent, hover, soft } = accentFromHex(hex);
+      root.style.setProperty('--accent', accent);
+      root.style.setProperty('--accent-hover', hover);
+      root.style.setProperty('--accent-soft', soft);
+    }
+  }
+
+  function renderAccentRow() {
+    const accentRow = $('#accentRow');
+    accentRow.innerHTML = '';
+    const activeColor = customAccent || '';
+    ACCENT_PRESETS.forEach((p) => {
+      const btn = document.createElement('button');
+      btn.className = 'accent-swatch' + (activeColor === p.color ? ' selected' : '');
+      btn.title = p.label;
+      btn.style.setProperty('--sw-accent', p.color);
+      btn.addEventListener('click', () => {
+        customAccent = p.color;
+        try { localStorage.setItem(ACCENT_KEY, p.color); } catch {}
+        applyAccentColor(p.color);
+        renderAccentRow();
+      });
+      accentRow.appendChild(btn);
+    });
+
+    const picker = document.createElement('input');
+    picker.type = 'color';
+    picker.className = 'accent-picker';
+    picker.title = 'Custom color';
+    picker.value = activeColor || '#3e82f7';
+    picker.addEventListener('input', (e) => {
+      customAccent = e.target.value;
+      try { localStorage.setItem(ACCENT_KEY, customAccent); } catch {}
+      applyAccentColor(customAccent);
+      renderAccentRow();
+    });
+    accentRow.appendChild(picker);
+
+    if (activeColor) {
+      const reset = document.createElement('button');
+      reset.className = 'accent-reset';
+      reset.textContent = 'Reset';
+      reset.title = 'Revert to theme default';
+      reset.addEventListener('click', () => {
+        customAccent = null;
+        try { localStorage.removeItem(ACCENT_KEY); } catch {}
+        applyAccentColor(null);
+        renderAccentRow();
+      });
+      accentRow.appendChild(reset);
+    }
   }
 
   modelToggleBtn.addEventListener('click', () => {
@@ -1750,7 +1824,7 @@ body{
       setProgressFill(0);
       aiProgressLabel.textContent = 'Send';
       engineStatus.textContent = state.pipelinesReady[state.modelKey]
-        ? `Ready , ${MODELS[state.modelKey].label}`
+        ? `Ready, ${MODELS[state.modelKey].label}`
         : 'Ready';
     }
   }
@@ -1766,15 +1840,10 @@ body{
     msgCount.textContent = n ? `${n} message${n === 1 ? '' : 's'}` : '';
   }
 
-  // Assistant replies commonly come back with markdown syntax (**bold**,
-  // `code`, lists, links, headers) , this renders that deliberately small
-  // subset rather than implementing full CommonMark, so this stays a
-  // hand-rolled ~40-line function instead of pulling in an external library
-  // (Palaver is otherwise fully self-contained apart from transformers.js
-  // itself). Raw HTML is escaped BEFORE any markdown syntax is applied, so
-  // text a model generates can never inject markup , only the tags this
-  // code itself constructs ever reach innerHTML. User messages are shown as
-  // plain text elsewhere; this is only ever used for assistant replies.
+  // Minimal markdown renderer: **bold**, `code`, lists, links, headers.
+  // No external library; Palaver is otherwise self-contained apart from
+  // transformers.js.  HTML is escaped first, so only tags this code
+  // constructs can reach innerHTML.
   function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
@@ -1789,9 +1858,8 @@ body{
       codeSpans.push(code);
       return '@@PALAVER_CODE_' + (codeSpans.length - 1) + '@@';
     });
-    // Scheme-restricted so a model can't produce a javascript: URL that
-    // runs on click; quotes excluded so a URL can't break out of the href
-    // attribute it gets inserted into below.
+  // Scheme-restricted so a model can't produce a javascript: URL that runs
+  // on click.
     out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)"']+|mailto:[^\s)"']+)\)/g,
       (_, text, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`);
     out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -1829,7 +1897,7 @@ body{
         const codeLines = [];
         i++;
         while (i < lines.length && !/^```\s*$/.test(lines[i])) { codeLines.push(lines[i]); i++; }
-        i++; // skip closing fence (or run off the end if unclosed , still renders what streamed in)
+        i++; // skip closing fence (or run off the end if unclosed, still renders what streamed in)
         html.push('<pre><code>' + escapeHtml(codeLines.join('\n')) + '</code></pre>');
         continue;
       }
@@ -1873,12 +1941,10 @@ body{
     return html.join('\n');
   }
 
-  // With Thinking mode on, Gemma 4 wraps its reasoning as
-  // "<|channel>thought\n...<channel|>" before the actual answer (see the
-  // WORKER_SRC generate handler, which prepends the <|think|> trigger token
-  // when genOpts.thinking is set). No other model in this app ever produces
-  // this marker, so this is a harmless no-op , {thought: '', answer: raw}
-  // , for every reply that isn't Gemma 4 with thinking on.
+  // With Thinking mode on, Gemma 4 wraps reasoning as
+  // "<|channel>thought\n...<channel|>" before the actual answer.
+  // No other model produces this marker, so splitThinking() is a no-op for
+  // every reply that isn't Gemma 4 with thinking on.
   function splitThinking(raw) {
     const openTag = '<|channel>thought';
     const closeTag = '<channel|>';
@@ -2088,8 +2154,7 @@ body{
   }
 
   /* --------------------------- Chat history (sidebar) ---------------------- */
-  // Every conversation is stored client-side only, in localStorage , nothing
-  // ever leaves the browser, same as the model inference itself.
+  // Conversations are stored client-side only, in localStorage.
 
   function loadChatsFromStorage() {
     try {
@@ -2305,11 +2370,27 @@ body{
 
   const systemPromptInput = $('#systemPromptInput');
   const saveSystemPromptBtn = $('#saveSystemPromptBtn');
-  systemPromptInput.value = getSystemPrompt();
+  systemPromptInput.value = userSystemPrompt || SYSTEM_PROMPT_DEFAULT;
   saveSystemPromptBtn.addEventListener('click', () => {
     userSystemPrompt = systemPromptInput.value.trim() || null;
     try { localStorage.setItem(SYSTEM_PROMPT_KEY, userSystemPrompt || ''); } catch {}
     flashSendBtn('System prompt saved', 1400);
+  });
+
+  const customInstructionsInput = $('#customInstructionsInput');
+  const saveCustomInstructionsBtn = $('#saveCustomInstructionsBtn');
+  const clearCustomInstructionsBtn = $('#clearCustomInstructionsBtn');
+  customInstructionsInput.value = customInstructions || '';
+  saveCustomInstructionsBtn.addEventListener('click', () => {
+    customInstructions = customInstructionsInput.value.trim() || null;
+    try { localStorage.setItem(CUSTOM_INSTRUCTIONS_KEY, customInstructions || ''); } catch {}
+    flashSendBtn('Custom instructions saved', 1400);
+  });
+  clearCustomInstructionsBtn.addEventListener('click', () => {
+    customInstructions = null;
+    customInstructionsInput.value = '';
+    try { localStorage.removeItem(CUSTOM_INSTRUCTIONS_KEY); } catch {}
+    flashSendBtn('Custom instructions cleared', 1400);
   });
 
   sidebarCollapseBtn.addEventListener('click', () => {
@@ -2345,36 +2426,25 @@ body{
   sendBtn.addEventListener('click', sendOrStop);
 
   function stopGenerating() {
-    // transformers.js doesn't expose a clean mid-stream abort, so the
-    // reliable way to actually stop token generation (not just stop
-    // *listening* to it) is to discard the worker producing it , same
-    // recovery trick used when a model fails to load. The model is cached
-    // by the browser after the first download, so reloading it into the
-    // fresh worker is fast, not a re-download.
+    // transformers.js doesn't expose a mid-stream abort.  The reliable way
+    // to stop generation is to discard the worker producing it.  The model
+    // is cached after the first download, so reloading into a fresh worker
+    // is fast.
     state.stopRequested = true;
     worker.terminate();
     worker = makeWorker();
     state.pipelinesReady = {};
-    // pendingGen.clear() below drops the in-flight generate's resolvers
-    // without ever calling resolve/reject, so doSend()'s `await
-    // runGenerate(...)` simply hangs forever , its try/catch/finally never
-    // runs. That means THIS function is the only place a stopped turn ever
-    // gets recorded, and it must record something: every model here enforces
-    // strict user/assistant alternation in its chat template (Gemma throws
-    // "Conversation roles must alternate..." otherwise), and doSend() always
-    // pushes the user's message before generation starts. Leaving that
-    // without a paired assistant reply means the very next send pushes a
-    // second consecutive user turn and every future generation on this chat
-    // fails outright , so the partial reply (or a placeholder, if nothing
-    // streamed in yet) is saved here as the assistant turn.
+    // pendingGen.clear() drops in-flight resolvers without calling
+    // resolve/reject, so doSend()'s await hangs forever.  This is the only
+    // place a stopped turn gets recorded.  Every model enforces strict
+    // user/assistant alternation, and doSend() already pushed the user
+    // message, so a partial reply (or placeholder) is saved as the
+    // assistant turn.
     pendingGen.clear();
     if (currentGenWrap && currentGenWrap._bubble) {
-      // Read the raw markdown source tracked alongside the rendered HTML
-      // (currentGenWrap._rawText), not the bubble's rendered .textContent ,
-      // once replies are markdown-rendered, .textContent would return tags
-      // stripped of their markdown syntax (e.g. "**hi**" already rendered
-      // to <strong>hi</strong> reads back as just "hi"), corrupting both
-      // what gets displayed here and what gets saved to history below.
+      // Read _rawText (markdown source), not .textContent.  Once replies are
+      // markdown-rendered, .textContent strips syntax (e.g. "**hi**" reads
+      // back as just "hi").
       const partial = currentGenWrap._rawText || '';
       setBubbleContent(currentGenWrap._bubble, 'assistant', partial + ' [stopped]');
       const m = MODELS[state.modelKey];
@@ -2408,8 +2478,7 @@ body{
 
     // ---- Heuristic pre-routing for local tools ----
     // Deterministic tools that offload work the 1B model would hallucinate.
-    // The tool answer is injected as context so the model can reference it,
-    // but the tool result bubble stays visible in the UI.
+    // Tool result is injected as context and shown as a visible bubble.
     const route = heuristicRoute(text);
     let toolContext = null;
     if (route.handled) {
@@ -2511,7 +2580,7 @@ body{
     try {
       await ensureModel(state.modelKey);
     } catch (err) {
-      const base = "Sorry , I couldn't load the AI model on this device.";
+      const base = "Sorry, I couldn't load the AI model on this device.";
       const msg = (err && err.message) ? `${base}\n\n${err.message}` : base;
       addMessageBubble('assistant', msg, MODELS[state.modelKey].label);
       // Model load failed after user turn was pushed, need paired assistant
@@ -2523,14 +2592,11 @@ body{
     }
 
     const modelKeyAtStart = state.modelKey;
-    // Gemma 4's own docs are explicit that a previous turn's thinking trace
-    // must not be replayed back as history ("Thoughts from previous model
-    // turns must not be added before the next user turn begins") , a stored
-    // assistant message keeps the full raw text (with the thinking block)
-    // so it still displays/collapses correctly when revisited, but only the
-    // answer portion goes out over the wire. splitThinking() is a no-op for
-    // any message that never had a thinking block, so this is safe for
-    // every model.
+    // Gemma 4's docs: thought traces from previous turns must not replayed
+    // as history.  Stored messages keep full raw text (thinking block
+    // included) for display, but only the answer portion goes over the wire.
+    // splitThinking() is a no-op for messages without thinking blocks, so
+    // this is safe for every model.
     const wireMessages = alternateMessages([
       { role: 'system', content: getSystemPrompt() },
       ...(toolContext ? [{ role: 'system', content: 'Tool answer for reference: ' + toolContext }] : []),
@@ -2539,8 +2605,7 @@ body{
         content: m.role === 'assistant' ? (splitThinking(m.content).answer || m.content) : m.content,
       })),
     ]);
-    // thinking is read by the worker for all models ,
-    // safe to include unconditionally here.
+    // thinking is read by the worker for all models, safe to include.
     const genOpts = { max_new_tokens: MAX_NEW_TOKENS, temperature: 0.7, top_p: 0.9, do_sample: true, thinking: state.thinkingEnabled };
 
     state.generating = true;
@@ -2581,12 +2646,8 @@ body{
         console.error(err);
         const detail = (err && err.message) ? ` (${err.message})` : '';
         setBubbleContent(wrap._bubble, 'assistant', acc ? acc + '\n\n[generation failed' + detail + ']' : 'Something went wrong generating a reply.' + detail);
-        // Same reason as stopGenerating(): the user's turn was already
-        // pushed to state.messages before generation started, and every
-        // model here requires strictly alternating user/assistant turns in
-        // its chat template. Without a paired assistant turn recorded here,
-        // the next message sent would push a second consecutive user turn
-        // and fail the same way even on a model that was working fine.
+        // The user's turn was already pushed; without a paired assistant
+        // turn the next send would push consecutive user turns and fail.
         state.messages.push({
           role: 'assistant',
           content: acc.trim() || '(reply failed to generate)',
@@ -2602,16 +2663,16 @@ body{
     }
   }
 
-  /* -------------------------------- Boot ------------------------------------ */
-
-  initChats();
+  /* -------------------------------- Boot ------------------------------------ */  initChats();
   renderModelOptions();
   renderThemes();
+  if (customAccent) applyAccentColor(customAccent);
+  renderAccentRow();
   updateThinkingModeBtn();
   updateSendBtn();
   autoGrow();
-  // Start fetching the default model in the background immediately, so Send
-  // is usually instant by the time someone actually types something.
+  // Start fetching the default model so Send is usually instant by the time
+  // someone actually types something.
   ensureModel(state.modelKey).catch(() => {});
 })();
 
