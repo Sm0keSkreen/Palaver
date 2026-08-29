@@ -2569,6 +2569,14 @@ body{
       if (toolResult) {
         const m = MODELS[state.modelKey];
         addMessageBubble('assistant', toolResult, (m ? m.label : '') + toolLabel);
+        // Tagged _tool so it's excluded from wireMessages below (the model
+        // gets it fresh via toolContext instead) while still getting a real
+        // state.messages entry. Without one, this bubble has no matching
+        // slot in state.messages and every DOM-index lookup after it
+        // (Edit/Regen via findMsgIndex, persistCurrentChat) is off by one,
+        // and the bubble itself is dropped on reload since persistence only
+        // ever reads from state.messages.
+        state.messages.push({ role: 'assistant', content: toolResult, modelLabel: (m ? m.label : '') + toolLabel, _tool: true });
         toolContext = toolResult;
       }
     }
